@@ -1,0 +1,9 @@
+{
+  "module": {
+    "name": "rdborm",
+    "type": "har",
+    "deviceTypes": [
+      "default"
+    ]
+  }
+}
