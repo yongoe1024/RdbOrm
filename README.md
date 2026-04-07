@@ -13,8 +13,8 @@
 
 ## 下载安装
 
-1. 安装最新版 `ohpm i @dims/rdbplus`
-2. 升级版本 `ohpm update @dims/rdbplus`，建议使用最新版避免bug
+1. 安装最新版 `ohpm i @dims/rdborm`
+2. 升级版本 `ohpm update @dims/rdborm`，建议使用最新版避免bug
 
 OpenHarmony ohpm
 环境配置等更多内容，请参考[如何安装 OpenHarmony ohpm 包](https://ohpm.openharmony.cn/#/cn/help/downloadandinstall)
