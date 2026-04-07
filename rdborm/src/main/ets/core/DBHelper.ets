@@ -2,6 +2,7 @@ import relationalStore from '@ohos.data.relationalStore'
 import { TableParams } from '../model/TableParams'
 import { RdbOrm } from './RdbOrm'
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { Wrapper } from './Wrapper';
 
 /**
  * 数据库工具
@@ -12,10 +13,17 @@ const TAG: string = 'rdborm';
 export class DBHelper<T> {
   private store: relationalStore.RdbStore
   private params: TableParams<T>
+  private propertyToFieldMap: Record<string, string> = {}
+  private fieldToPropertyMap: Record<string, string> = {}
+
+  private constructor(store: relationalStore.RdbStore, params: TableParams<T>) {
+    this.store = store
+    this.params = params
+    this.initFieldMappings()
+  }
 
   /**
    * 获取版本
-   * @returns 版本
    */
   getVersion(): number {
     return this.store.version
@@ -23,7 +31,6 @@ export class DBHelper<T> {
 
   /**
    * 更新版本
-   * @param v 版本
    */
   updateVersion(v: number) {
     this.store.version = v
@@ -31,26 +38,20 @@ export class DBHelper<T> {
 
   /**
    * 获取RdbStore对象
-   * @returns RdbStore对象
    */
   getStore(): relationalStore.RdbStore {
     return this.store
   }
 
-  constructor(store: relationalStore.RdbStore, params: TableParams<T>) {
-    this.store = store
-    this.params = params
-  }
-
-
   /**
    * 创建新的dbHelper对象
    * @throws BusinessError
    * @param params 构建参数
+   * @param context 不传入则使用默认context
    * @returns DBHelper
    */
-  static async create<T>(params: TableParams<T>): Promise<DBHelper<T>> {
-    let store = await relationalStore.getRdbStore(params.buildParams.context, params.buildParams.config)
+  static async create<T>(params: TableParams<T>, context?: Context): Promise<DBHelper<T>> {
+    let store = await relationalStore.getRdbStore(context ?? params.buildParams.context, params.buildParams.config)
     return new DBHelper<T>(store, params)
   }
 
@@ -81,8 +82,12 @@ export class DBHelper<T> {
     }
     const res = this.getStore().querySqlSync(sql, args)
     const list: relationalStore.ValuesBucket[] = []
-    while (res.goToNextRow()) {
-      list.push(res.getRow())
+    try {
+      while (res.goToNextRow()) {
+        list.push(res.getRow())
+      }
+    } finally {
+      res.close()
     }
     return list
   }
@@ -90,106 +95,150 @@ export class DBHelper<T> {
   /**
    * 根据谓词进行查询
    * @throws BusinessError
-   * @param fn 谓词的回调
+   * @param wrapper 条件构造器
    * @param columns 要查询的列
    * @returns 实体类
    */
-  select(fn?: (item: relationalStore.RdbPredicates) => void, columns?: string[]): T[] {
+  select(wrapper?: Wrapper, columns?: string[]): T[] {
     const predicates = new relationalStore.RdbPredicates(this.params.tableName)
-    fn?.(predicates)
+    this.applyWrapper(predicates, wrapper)
     if (RdbOrm.debugSql) {
-      const sqlInfo = relationalStore.getQuerySqlInfo(predicates)
+      const sqlInfo = relationalStore.getQuerySqlInfo(predicates, columns)
       hilog.debug(DOMAIN, TAG, `SQL:${sqlInfo.sql}，args:${sqlInfo.args || []}`);
     }
     const res = this.getStore().querySync(predicates, columns)
-    let list: T[] = this.getData(res)
-    return list
+    try {
+      return this.getData(res)
+    } finally {
+      res.close()
+    }
+  }
+
+  /**
+   * 查询符合条件的记录数
+   * @throws BusinessError
+   * @param wrapper 条件构造器
+   * @returns 记录数
+   */
+  count(wrapper?: Wrapper): number {
+    const predicates = new relationalStore.RdbPredicates(this.params.tableName)
+    this.applyWrapper(predicates, wrapper)
+    if (RdbOrm.debugSql) {
+      const sqlInfo = relationalStore.getQuerySqlInfo(predicates, ['count(*) as total'])
+      hilog.debug(DOMAIN, TAG, `SQL:${sqlInfo.sql}，args:${sqlInfo.args || []}`);
+    }
+    const res = this.getStore().querySync(predicates, ['count(*) as total'])
+    try {
+      let total = 0
+      while (res.goToNextRow()) {
+        const row = res.getRow()
+        total = Number(row['total'] ?? 0)
+      }
+      return total
+    } finally {
+      res.close()
+    }
   }
 
   /**
    * 向目标表中插入一行数据
    * @throws BusinessError
-   * @param obj 实体类
+   * @param obj 实体对象
    * @param conflict 指定冲突解决模式
    * @returns 如果操作成功，返回行ID；否则返回-1
    */
   insert(obj: T, conflict?: relationalStore.ConflictResolution): number {
-    const valueBucket = this.getRecode(obj)
+    const valueBucket = this.getRecord(obj)
     if (RdbOrm.debugSql) {
       const sqlInfo = relationalStore.getInsertSqlInfo(this.params.tableName, valueBucket, conflict)
       hilog.debug(DOMAIN, TAG, `SQL:${sqlInfo.sql}，args:${sqlInfo.args || []}`);
     }
-    let res: number = -1
-    if (conflict) {
-      res = this.getStore().insertSync(this.params.tableName, valueBucket, conflict)
-    } else {
-      res = this.getStore().insertSync(this.params.tableName, valueBucket)
-    }
-    return res
+    return this.getStore().insertSync(this.params.tableName, valueBucket, conflict)
   }
 
   /**
    * 向目标表中插入一组数据
    * @throws BusinessError
-   * @param obj 实体类数组
+   * @param list 实体对象数组
    * @param conflict 指定冲突解决模式
    * @returns 如果操作成功，返回插入的数据个数，否则返回-1
    */
   batchInsert(list: T[], conflict?: relationalStore.ConflictResolution): number {
     const bucketList: relationalStore.ValuesBucket[] = []
     list.forEach(item => {
-      bucketList.push(this.getRecode(item))
+      bucketList.push(this.getRecord(item))
     })
-    let res: number = -1
-    if (conflict) {
-      res = this.getStore().batchInsertWithConflictResolutionSync(this.params.tableName, bucketList, conflict)
+    if (conflict !== undefined) {
+      return this.getStore().batchInsertWithConflictResolutionSync(this.params.tableName, bucketList, conflict)
     } else {
-      res = this.getStore().batchInsertSync(this.params.tableName, bucketList)
+      return this.getStore().batchInsertSync(this.params.tableName, bucketList)
     }
-    return res
   }
 
   /**
    * 根据谓词条件，更新数据库中的数据
    * @throws BusinessError
-   * @param obj 实体类对象
-   * @param fn 谓词的回调
+   * @param wrapper 条件构造器，set用于更新字段，其余条件用于where
    * @param conflict 指定冲突解决模式
    * @returns 返回受影响的行数
    */
-  update(obj: T, fn?: (item: relationalStore.RdbPredicates) => void,
-    conflict?: relationalStore.ConflictResolution): number {
-    const valueBucket = this.getRecode(obj)
+  update(wrapper: Wrapper, conflict?: relationalStore.ConflictResolution): number {
     const predicates = new relationalStore.RdbPredicates(this.params.tableName)
-    fn?.(predicates)
+    const valueBucket = this.getUpdateRecord(wrapper)
+    this.applyWrapper(predicates, wrapper)
     if (RdbOrm.debugSql) {
       const sqlInfo = relationalStore.getUpdateSqlInfo(predicates, valueBucket, conflict)
       hilog.debug(DOMAIN, TAG, `SQL:${sqlInfo.sql}，args:${sqlInfo.args || []}`);
     }
-    let res: number = -1
-    if (conflict) {
-      res = this.getStore().updateSync(valueBucket, predicates, conflict)
-    } else {
-      res = this.getStore().updateSync(valueBucket, predicates)
-    }
-    return res
+    return this.getStore().updateSync(valueBucket, predicates, conflict)
   }
 
   /**
    * 根据谓词条件，从数据库中删除数据
    * @throws BusinessError
-   * @param fn 谓词的回调
+   * @param wrapper 条件构造器
    * @returns 返回受影响的行数
    */
-  delete(fn?: (item: relationalStore.RdbPredicates) => void): number {
+  delete(wrapper?: Wrapper): number {
     const predicates = new relationalStore.RdbPredicates(this.params.tableName)
-    fn?.(predicates)
+    this.applyWrapper(predicates, wrapper)
     if (RdbOrm.debugSql) {
       const sqlInfo = relationalStore.getDeleteSqlInfo(predicates)
       hilog.debug(DOMAIN, TAG, `SQL:${sqlInfo.sql}，args:${sqlInfo.args || []}`);
     }
     const res = this.getStore().deleteSync(predicates)
     return res
+  }
+
+  /**
+   * 根据主键更新数据
+   * @throws BusinessError
+   * @param obj 实体对象，必须包含主键属性
+   * @param conflict 指定冲突解决模式
+   * @returns 返回受影响的行数
+   */
+  updateById(obj: T, conflict?: relationalStore.ConflictResolution): number {
+    const data: ESObject = obj
+    const bucket = this.getRecord(obj)
+    const tableId = this.getTableIdOrThrow()
+    const propertyId = this.getPropertyIdOrThrow()
+    const predicates = new relationalStore.RdbPredicates(this.params.tableName)
+    predicates.equalTo(tableId, data[propertyId])
+    if (RdbOrm.debugSql) {
+      const sqlInfo = relationalStore.getUpdateSqlInfo(predicates, bucket, conflict)
+      hilog.debug(DOMAIN, TAG, `SQL:${sqlInfo.sql}，args:${sqlInfo.args || []}`);
+    }
+    return this.getStore().updateSync(bucket, predicates, conflict)
+  }
+
+  /**
+   * 根据主键删除数据
+   * @throws BusinessError
+   * @param id 主键值
+   * @returns 返回受影响的行数
+   */
+  deleteById(id: relationalStore.ValueType): number {
+    return this.delete(new Wrapper().eq(this.getTableIdOrThrow(), id))
   }
 
 
@@ -234,21 +283,26 @@ export class DBHelper<T> {
   }
 
   /**
-   * 根据实体类装饰器，过滤字段
+   * 关闭数据库连接
+   * @throws BusinessError
    */
-  private getRecode(obj: T): relationalStore.ValuesBucket {
-    let data: ESObject = obj
-    const recordData: relationalStore.ValuesBucket = {};
-    // 遍历实例的自有可枚举属性（排除原型链属性）
-    Object.keys(data).map((key: string) => {
-      // 判断是否存在字段
-      let fieldName = this.params.propertyKeys[key]
-      if (fieldName) {
-        // undefined转null
+  close(): void {
+    this.store.close()
+  }
+
+  /**
+   * 根据实体类装饰器过滤字段
+   */
+  private getRecord(obj: T): relationalStore.ValuesBucket {
+    const data: ESObject = obj
+    const recordData: relationalStore.ValuesBucket = {}
+    Object.keys(data).forEach((key: string) => {
+      const fieldName = this.propertyToFieldMap[key]
+      if (fieldName !== undefined) {
         recordData[fieldName] = data[key] ?? null
       }
     })
-    return recordData;
+    return recordData
   }
 
   /**
@@ -258,12 +312,11 @@ export class DBHelper<T> {
   private getData(res: relationalStore.ResultSet): T[] {
     const list: T[] = []
     while (res.goToNextRow()) {
-      let entity: ESObject = new this.params.buildParams.class()
-      let row: ESObject = res.getRow()
-      // 对应的转换进去，不对应的直接传
-      Object.keys(row).forEach(key => {
-        let propertyKey = this.params.fields[key]
-        if (propertyKey) {
+      const entity: ESObject = new this.params.buildParams.class()
+      const row: ESObject = res.getRow()
+      Object.keys(row).forEach((key: string) => {
+        const propertyKey = this.fieldToPropertyMap[key]
+        if (propertyKey !== undefined) {
           entity[propertyKey] = row[key]
         } else {
           entity[key] = row[key]
@@ -273,5 +326,160 @@ export class DBHelper<T> {
     }
     return list
   }
-}
 
+  private initFieldMappings(): void {
+    this.params.propertyKeys.forEach((propertyKey: string, index: number) => {
+      const fieldName = this.params.fields[index]
+      this.propertyToFieldMap[propertyKey] = fieldName
+      this.fieldToPropertyMap[fieldName] = propertyKey
+    })
+  }
+
+
+  private applyWrapper(predicates: relationalStore.RdbPredicates, wrapper?: Wrapper): void {
+    if (!wrapper) {
+      return
+    }
+
+    const actions = wrapper.getActions()
+    actions.forEach(action => {
+      const field = action.field
+      const fields = action.fields
+      switch (action.type) {
+        case 'set':
+          break
+        case 'inDevices':
+          predicates.inDevices(action.devices ?? [])
+          break
+        case 'inAllDevices':
+          predicates.inAllDevices()
+          break
+        case 'eq':
+          predicates.equalTo(field!, action.value!)
+          break
+        case 'notEq':
+          predicates.notEqualTo(field!, action.value!)
+          break
+        case 'or':
+          predicates.or()
+          this.applyLogicWrapper(predicates, action.wrapper)
+          break
+        case 'and':
+          predicates.and()
+          this.applyLogicWrapper(predicates, action.wrapper)
+          break
+        case 'contains':
+          predicates.contains(field!, action.value as string)
+          break
+        case 'beginsWith':
+          predicates.beginsWith(field!, action.value as string)
+          break
+        case 'endsWith':
+          predicates.endsWith(field!, action.value as string)
+          break
+        case 'isNull':
+          predicates.isNull(field!)
+          break
+        case 'isNotNull':
+          predicates.isNotNull(field!)
+          break
+        case 'like':
+          predicates.like(field!, action.value as string)
+          break
+        case 'glob':
+          predicates.glob(field!, action.value as string)
+          break
+        case 'between':
+          predicates.between(field!, action.start!, action.end!)
+          break
+        case 'notBetween':
+          predicates.notBetween(field!, action.start!, action.end!)
+          break
+        case 'lt':
+          predicates.lessThan(field!, action.value!)
+          break
+        case 'lte':
+          predicates.lessThanOrEqualTo(field!, action.value!)
+          break
+        case 'gt':
+          predicates.greaterThan(field!, action.value!)
+          break
+        case 'gte':
+          predicates.greaterThanOrEqualTo(field!, action.value!)
+          break
+        case 'orderByAsc':
+          predicates.orderByAsc(field!)
+          break
+        case 'orderByDesc':
+          predicates.orderByDesc(field!)
+          break
+        case 'distinct':
+          predicates.distinct()
+          break
+        case 'limit':
+          predicates.limitAs(action.numberValue!)
+          break
+        case 'offset':
+          predicates.offsetAs(action.numberValue!)
+          break
+        case 'groupBy':
+          predicates.groupBy(fields ?? [])
+          break
+        case 'indexedBy':
+          predicates.indexedBy(field!)
+          break
+        case 'in':
+          predicates.in(field!, action.values ?? [])
+          break
+        case 'notIn':
+          predicates.notIn(field!, action.values ?? [])
+          break
+        case 'notLike':
+          predicates.notLike(field!, action.value as string)
+          break
+        case 'having':
+          predicates.having(action.sql!, action.args)
+          break
+        case 'notContains':
+          predicates.notContains(field!, action.value as string)
+          break
+      }
+    })
+  }
+
+  private applyLogicWrapper(predicates: relationalStore.RdbPredicates, wrapper?: Wrapper): void {
+    if (!wrapper) {
+      return
+    }
+    predicates.beginWrap()
+    this.applyWrapper(predicates, wrapper)
+    predicates.endWrap()
+  }
+
+  private getUpdateRecord(wrapper: Wrapper): relationalStore.ValuesBucket {
+    const recordData: relationalStore.ValuesBucket = {}
+    wrapper.getActions().forEach(action => {
+      if (action.type === 'set' && action.field) {
+        recordData[action.field] = action.value ?? null
+      }
+    })
+    if (Object.keys(recordData).length === 0) {
+      throw new Error('update requires at least one set(...) action')
+    }
+    return recordData
+  }
+
+  private getTableIdOrThrow(): string {
+    if (!this.params.tableId) {
+      throw new Error('Primary key field is required for updateById/deleteById')
+    }
+    return this.params.tableId
+  }
+
+  private getPropertyIdOrThrow(): string {
+    if (!this.params.propertyId) {
+      throw new Error('Primary key field is required for updateById/deleteById')
+    }
+    return this.params.propertyId
+  }
+}

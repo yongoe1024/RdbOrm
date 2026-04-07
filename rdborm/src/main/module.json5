@@ -3,7 +3,9 @@
     "name": "rdborm",
     "type": "har",
     "deviceTypes": [
-      "default"
+      "default",
+      "phone",
+      "tablet",
     ]
   }
 }

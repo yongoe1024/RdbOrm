@@ -6,7 +6,9 @@ import { BuildParams } from "./BuildParams"
 export interface TableParams<T> {
   buildParams: BuildParams<T>
   tableName: string
-  fields: Record<string, string>
-  propertyKeys: Record<string, string>
+  fields: string[]
+  propertyKeys: string[]
+  tableId: string
+  propertyId: string
 }
 

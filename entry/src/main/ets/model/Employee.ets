@@ -3,7 +3,7 @@ import { Field, Table } from "@dims/rdborm"
 @Table('t_emp')
 export class Employee {
   // 大数
-  @Field()
+  @Field({ id: true })
   id?: number
   // 整数
   @Field()
@@ -20,5 +20,6 @@ export class Employee {
   // 多余
   other?: string
 
-
+  constructor() {
+  }
 }

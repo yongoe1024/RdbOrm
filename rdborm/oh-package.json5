@@ -1,13 +1,13 @@
 {
   "name": "@dims/rdborm",
   "version": "1.0.0",
-  "description": "鸿蒙关系型数据库ORM框架，一行搞定增删改查",
+  "description": "轻量ORM，简单无需SQL操作",
   "main": "Index.ets",
   "author": "yongoe",
   "license": "Apache-2.0",
   "dependencies": {},
   "homepage": "https://github.com/yongoe1024",
-  "repository": "https://gitee.com/yongoe/RdbPlus",
+  "repository": "https://github.com/yongoe1024/RdbOrm",
   "keywords": [
     "数据库",
     "SQLite",
