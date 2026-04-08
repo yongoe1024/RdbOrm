@@ -414,26 +414,6 @@ const wrapper = new Wrapper()
 - `select(columns)` 支持指定查询列；如果查询结果中包含未映射到实体字段的列，当前实现会直接挂到返回对象上。
 - 插入或按主键更新时，只会处理实体实例中当前存在且带 `@Field` 的属性。
 
-## 目录结构
-
-```text
-rdborm/
-├── Index.ets
-└── src/main/ets
-    ├── core
-    │   ├── DBHelper.ets
-    │   ├── RdbOrm.ets
-    │   └── Wrapper.ets
-    ├── decorator
-    │   ├── Field.ts
-    │   └── Table.ts
-    └── model
-        ├── BuildParams.ts
-        ├── FieldParams.ts
-        ├── MetaData.ts
-        └── TableParams.ets
-```
-
 ## 最小示例
 
 ```ts
