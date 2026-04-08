@@ -7,6 +7,7 @@ import { RdbOrm, Wrapper } from '@dims/rdborm'
 @Component
 struct Index {
   orm?: RdbOrm<Employee>
+  private readonly tableName: string = 't_emp'
 
   aboutToAppear(): void {
     RdbOrm.debugSql = true
@@ -50,7 +51,7 @@ struct Index {
     try {
       const db = await this.getDb()
       const res = db.executeSql(`
-        create table if not exists t_emp (
+        create table if not exists ${this.tableName} (
           id integer primary key autoincrement,
           age integer,
           name text,
@@ -69,6 +70,16 @@ struct Index {
       const db = await this.getDb()
       const count = db.delete()
       showDialog(`清空完成，删除 ${count} 条`)
+    } catch (error) {
+      showDialog(this.getErrorMessage(error))
+    }
+  }
+
+  private async testDropTable(): Promise<void> {
+    try {
+      const db = await this.getDb()
+      const res = db.executeSql(`drop table if exists ${this.tableName}`)
+      showDialog(`删除数据库表完成\n${JSON.stringify(res, null, 2)}`)
     } catch (error) {
       showDialog(this.getErrorMessage(error))
     }
@@ -170,7 +181,7 @@ struct Index {
       const logs: string[] = []
 
       db.executeSql(`
-        create table if not exists t_emp (
+        create table if not exists ${this.tableName} (
           id integer primary key autoincrement,
           age integer,
           name text,
@@ -235,39 +246,130 @@ struct Index {
     }
   }
 
+  @Builder
+  private buildActionButton(label: string, background: string, action: () => Promise<void>) {
+    Button(label)
+      .width('100%')
+      .height(48)
+      .fontSize(16)
+      .fontWeight(FontWeight.Medium)
+      .fontColor(Color.White)
+      .backgroundColor(background)
+      .borderRadius(14)
+      .onClick(async () => {
+        await action()
+      })
+  }
+
   build() {
-    Column() {
-      Button('一键测试').onClick(async () => {
-        await this.testAllInOne()
-      })
-      Button('建表').onClick(async () => {
-        await this.testCreateTable()
-      })
-      Button('清空表').onClick(async () => {
-        await this.testClearTable()
-      })
-      Button('单条插入').onClick(async () => {
-        await this.testInsert()
-      })
-      Button('批量插入').onClick(async () => {
-        await this.testBatchInsert()
-      })
-      Button('查询统计').onClick(async () => {
-        await this.testSelect()
-      })
-      Button('条件更新').onClick(async () => {
-        await this.testUpdate()
-      })
-      Button('主键更新').onClick(async () => {
-        await this.testUpdateById()
-      })
-      Button('主键删除').onClick(async () => {
-        await this.testDeleteById()
-      })
+    Stack({ alignContent: Alignment.BottomEnd }) {
+      Scroll() {
+        Column({ space: 18 }) {
+          Column({ space: 10 }) {
+            Text('RdbOrm 操作面板')
+              .fontSize(28)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#182431')
+            Text('将常用数据库操作集中到更清晰的卡片视图中，测试、增删改查一目了然。')
+              .fontSize(14)
+              .lineHeight(22)
+              .fontColor('#5B6570')
+          }
+          .alignItems(HorizontalAlign.Start)
+          .width('100%')
+
+          Column({ space: 12 }) {
+            Text('推荐操作')
+              .fontSize(18)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#182431')
+              .width('100%')
+
+            this.buildActionButton('一键测试', '#2B6AF3', async () => {
+              await this.testAllInOne()
+            })
+
+            this.buildActionButton('建表', '#36A269', async () => {
+              await this.testCreateTable()
+            })
+
+            this.buildActionButton('清空表', '#F39C12', async () => {
+              await this.testClearTable()
+            })
+          }
+          .width('100%')
+          .padding(20)
+          .backgroundColor('#FDFDFD')
+          .borderRadius(24)
+
+          Column({ space: 12 }) {
+            Text('数据操作')
+              .fontSize(18)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#182431')
+              .width('100%')
+
+            this.buildActionButton('单条插入', '#4E7CF0', async () => {
+              await this.testInsert()
+            })
+
+            this.buildActionButton('批量插入', '#5B8FF9', async () => {
+              await this.testBatchInsert()
+            })
+
+            this.buildActionButton('查询统计', '#2AA899', async () => {
+              await this.testSelect()
+            })
+
+            this.buildActionButton('条件更新', '#8E6AF5', async () => {
+              await this.testUpdate()
+            })
+
+            this.buildActionButton('主键更新', '#7C5CFA', async () => {
+              await this.testUpdateById()
+            })
+
+            this.buildActionButton('主键删除', '#E86A5F', async () => {
+              await this.testDeleteById()
+            })
+          }
+          .width('100%')
+          .padding(20)
+          .backgroundColor('#FDFDFD')
+          .borderRadius(24)
+        }
+        .width('100%')
+        .padding({
+          left: 20,
+          right: 20,
+          top: 28,
+          bottom: 110
+        })
+      }
+      .scrollBar(BarState.Off)
+      .width('100%')
+      .height('100%')
+
+      Button('删除数据库表')
+        .fontSize(15)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(Color.White)
+        .backgroundColor('#D9485F')
+        .borderRadius(20)
+        .padding({
+          left: 18,
+          right: 18,
+          top: 12,
+          bottom: 12
+        })
+        .margin({ right: 20, bottom: 24 })
+        .align(Alignment.BottomEnd)
+        .onClick(async () => {
+          await this.testDropTable()
+        })
     }
-    .justifyContent(FlexAlign.Center)
-    .alignItems(HorizontalAlign.Center)
-    .height('100%')
     .width('100%')
+    .height('100%')
+    .backgroundColor('#F3F6FB')
   }
 }
