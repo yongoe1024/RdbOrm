@@ -1,14 +1,12 @@
-import { BuildParams } from "./BuildParams"
+import { BuildParams } from './BuildParams'
+import { ColumnMeta } from './ColumnMeta'
 
 /**
- * orm参数
+ * 内部参数：build 之后传给 DBHelper 的完整描述
  */
 export interface TableParams<T> {
   buildParams: BuildParams<T>
   tableName: string
-  fields: string[]
-  propertyKeys: string[]
-  tableId: string
-  propertyId: string
+  columns: ColumnMeta[]
+  primaryKey?: ColumnMeta
 }
-

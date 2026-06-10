@@ -1,453 +1,488 @@
-import relationalStore from '@ohos.data.relationalStore'
+import { relationalStore } from '@kit.ArkData'
+import { hilog } from '@kit.PerformanceAnalysisKit'
 import { TableParams } from '../model/TableParams'
-import { RdbOrm } from './RdbOrm'
-import { hilog } from '@kit.PerformanceAnalysisKit';
-import { Wrapper } from './Wrapper';
+import { ColumnMeta } from '../model/ColumnMeta'
+import { Wrapper, WrapperAction } from './Wrapper'
+
+const DOMAIN: number = 0x0000
+const TAG: string = 'rdborm'
+
+// ---------- SQL 语句构建工具（模块级纯函数） ----------
+
+/** 构建单列 DDL 定义 */
+function buildColumnDefSql(c: ColumnMeta): string {
+  const parts: string[] = [quoteIdentifier(c.column), c.type ?? 'TEXT']
+  if (c.primaryKey) {
+    parts.push('PRIMARY KEY')
+    // AUTOINCREMENT 仅对 INTEGER PK 合法（SQLite 规范）
+    if (c.autoIncrement !== false && c.type === 'INTEGER') {
+      parts.push('AUTOINCREMENT')
+    }
+  }
+  // INTEGER 主键作为 ROWID 别名允许 NULL 自增；其它类型主键必须 NOT NULL
+  if (c.nullable === false && (!c.primaryKey || c.type !== 'INTEGER')) {
+    parts.push('NOT NULL')
+  }
+  if (c.unique) {
+    parts.push('UNIQUE')
+  }
+  if (c.defaultValue !== undefined) {
+    parts.push(`DEFAULT ${formatDefaultValue(c.defaultValue)}`)
+  }
+  return parts.join(' ')
+}
+
+/** 格式化 DEFAULT 值 */
+function formatDefaultValue(v: relationalStore.ValueType): string {
+  if (v === null) {
+    return 'NULL'
+  }
+  if (typeof v === 'number') {
+    return String(v)
+  }
+  if (typeof v === 'boolean') {
+    return v ? '1' : '0'
+  }
+  if (typeof v === 'string') {
+    return `'${v.replace(/'/g, "''")}'`
+  }
+  throw new Error('createTable 暂不支持 BLOB / Uint8Array 默认值；请使用 executeSql 手写 CREATE TABLE')
+}
+
+/** SQL 标识符引号包裹 */
+function quoteIdentifier(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`
+}
+
+// ---------- Wrapper action → RdbPredicates 分发映射 ----------
+
+const ACTION_HANDLERS: Record<string, (p: relationalStore.RdbPredicates, a: WrapperAction, f: string | undefined) => void> = {
+  inDevices:    (p, a)       => p.inDevices(a.devices ?? []),
+  inAllDevices: (p)          => p.inAllDevices(),
+  eq:           (p, a, f)    => p.equalTo(f!, a.value!),
+  notEq:        (p, a, f)    => p.notEqualTo(f!, a.value!),
+  lt:           (p, a, f)    => p.lessThan(f!, a.value!),
+  lte:          (p, a, f)    => p.lessThanOrEqualTo(f!, a.value!),
+  gt:           (p, a, f)    => p.greaterThan(f!, a.value!),
+  gte:          (p, a, f)    => p.greaterThanOrEqualTo(f!, a.value!),
+  between:      (p, a, f)    => p.between(f!, a.start!, a.end!),
+  notBetween:   (p, a, f)    => p.notBetween(f!, a.start!, a.end!),
+  in:           (p, a, f)    => p.in(f!, a.values ?? []),
+  notIn:        (p, a, f)    => p.notIn(f!, a.values ?? []),
+  isNull:       (p, _, f)    => p.isNull(f!),
+  isNotNull:    (p, _, f)    => p.isNotNull(f!),
+  like:         (p, a, f)    => p.like(f!, a.value as string),
+  notLike:      (p, a, f)    => p.notLike(f!, a.value as string),
+  glob:         (p, a, f)    => p.glob(f!, a.value as string),
+  contains:     (p, a, f)    => p.contains(f!, a.value as string),
+  notContains:  (p, a, f)    => p.notContains(f!, a.value as string),
+  beginsWith:   (p, a, f)    => p.beginsWith(f!, a.value as string),
+  endsWith:     (p, a, f)    => p.endsWith(f!, a.value as string),
+  orderByAsc:   (p, _, f)    => p.orderByAsc(f!),
+  orderByDesc:  (p, _, f)    => p.orderByDesc(f!),
+  distinct:     (p)          => p.distinct(),
+  limit:        (p, a)       => p.limitAs(a.numberValue!),
+  offset:       (p, a)       => p.offsetAs(a.numberValue!),
+  groupBy:      (p, a)       => p.groupBy(a.fields ?? []),
+  indexedBy:    (p, _, f)    => p.indexedBy(f!),
+  having:       (p, a)       => p.having(a.sql!, a.args),
+}
 
 /**
- * 数据库工具
+ * 数据库操作封装。建议通过 `RdbOrm.build(...).getDBHelper()` 获取实例。
  */
-const DOMAIN: number = 0x0000;
-const TAG: string = 'rdborm';
-
 export class DBHelper<T> {
   private store: relationalStore.RdbStore
   private params: TableParams<T>
-  private propertyToFieldMap: Record<string, string> = {}
-  private fieldToPropertyMap: Record<string, string> = {}
+  private propertyToColumn: Map<string, ColumnMeta> = new Map()
+  private columnToProperty: Map<string, ColumnMeta> = new Map()
 
   private constructor(store: relationalStore.RdbStore, params: TableParams<T>) {
     this.store = store
     this.params = params
-    this.initFieldMappings()
+    for (let i = 0; i < params.columns.length; i++) {
+      const c = params.columns[i]
+      this.propertyToColumn.set(c.property, c)
+      this.columnToProperty.set(c.column, c)
+    }
   }
 
-  /**
-   * 获取版本
+  /** @internal 仅供 RdbOrm 调用
+   * @throws BusinessError
    */
+  static async create<T>(params: TableParams<T>): Promise<DBHelper<T>> {
+    const store = await relationalStore.getRdbStore(
+      params.buildParams.context,
+      params.buildParams.config,
+    )
+    return new DBHelper<T>(store, params)
+  }
+
+  // ---------- 元信息 ----------
+
   getVersion(): number {
     return this.store.version
   }
 
-  /**
-   * 更新版本
-   */
-  updateVersion(v: number) {
+  setVersion(v: number): void {
     this.store.version = v
   }
 
-  /**
-   * 获取RdbStore对象
-   */
   getStore(): relationalStore.RdbStore {
     return this.store
   }
 
-  /**
-   * 创建新的dbHelper对象
-   * @throws BusinessError
-   * @param params 构建参数
-   * @param context 不传入则使用默认context
-   * @returns DBHelper
-   */
-  static async create<T>(params: TableParams<T>, context?: Context): Promise<DBHelper<T>> {
-    let store = await relationalStore.getRdbStore(context ?? params.buildParams.context, params.buildParams.config)
-    return new DBHelper<T>(store, params)
-  }
+  // ---------- DDL ----------
 
   /**
-   * 执行包含指定参数的SQL语句
+   * 根据装饰器元数据生成建表语句
+   *
+   * 列类型由 `@Field({ type })` / `@Id` 决定；未声明类型时默认 `TEXT`。
+   * 主键默认为 `INTEGER PRIMARY KEY AUTOINCREMENT`，可通过 `@Id({ autoIncrement: false })` 关闭。
    * @throws BusinessError
-   * @param sql SQL语句
-   * @param args SQL语句中占位符的值
-   * @returns SQL执行后的结果
+   */
+  createTable(): void {
+    const sql = buildCreateTableSql()
+    this.logSql(sql)
+    this.store.executeSync(sql)
+  }
+
+  private buildCreateTableSql(): string {
+    const cols: string[] = []
+    for (let i = 0; i < this.params.columns.length; i++) {
+      cols.push(buildColumnDefSql(this.params.columns[i]))
+    }
+    return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(this.params.tableName)} (\n  ${cols.join(',\n  ')}\n)`
+  }
+
+  /** 等价于 `DROP TABLE IF EXISTS <table>` */
+  dropTable(): void {
+    const sql = `DROP TABLE IF EXISTS ${quoteIdentifier(this.params.tableName)}`
+    this.logSql(sql)
+    this.store.executeSync(sql)
+  }
+
+  // ---------- 原生 SQL ----------
+
+  /**
+   * 执行原生 SQL。`args` 通过 SQLite 预编译参数传入；**`sql` 字符串本身由调用方负责**——
+   * 任何拼接到 `sql` 里的外部输入都需要自行做白名单校验。
    */
   executeSql(sql: string, args?: Array<relationalStore.ValueType>): relationalStore.ValueType {
-    if (RdbOrm.debugSql) {
-      hilog.debug(DOMAIN, TAG, `SQL:${sql}，args:${args || []}`);
-    }
-    return this.getStore().executeSync(sql, args)
+    this.logSql(sql, args)
+    return this.store.executeSync(sql, args)
   }
 
   /**
-   * 根据指定SQL语句查询数据库中的数据
-   * @throws BusinessError
-   * @param sql SQL语句
-   * @param args SQL语句中占位符的值
-   * @returns Record<string, ValueType>
+   * 执行原生查询 SQL，返回原始 ValuesBucket 数组——**不做实体映射、不做 boolean 转换**。
+   * 列值就是 SQLite 存的什么样返回什么样（INTEGER / TEXT / REAL / BLOB）。
+   * 如果需要 boolean 字段自动转换，请改用 `select()`。
    */
   querySql(sql: string, args?: Array<relationalStore.ValueType>): relationalStore.ValuesBucket[] {
-    if (RdbOrm.debugSql) {
-      hilog.debug(DOMAIN, TAG, `SQL:${sql}，args:${args || []}`);
-    }
-    const res = this.getStore().querySqlSync(sql, args)
-    const list: relationalStore.ValuesBucket[] = []
-    try {
-      while (res.goToNextRow()) {
-        list.push(res.getRow())
+    this.logSql(sql, args)
+    const rs = this.store.querySqlSync(sql, args)
+    return this.consumeResultSet(rs, () => {
+      const list: relationalStore.ValuesBucket[] = []
+      while (rs.goToNextRow()) {
+        list.push(rs.getRow())
       }
-    } finally {
-      res.close()
-    }
-    return list
+      return list
+    })
   }
 
-  /**
-   * 根据谓词进行查询
-   * @throws BusinessError
-   * @param wrapper 条件构造器
-   * @param columns 要查询的列
-   * @returns 实体类
-   */
+  // ---------- 查询 ----------
+
+  /** 按条件查询实体列表。无条件时返回全表。 */
   select(wrapper?: Wrapper, columns?: string[]): T[] {
-    const predicates = new relationalStore.RdbPredicates(this.params.tableName)
-    this.applyWrapper(predicates, wrapper)
-    if (RdbOrm.debugSql) {
-      const sqlInfo = relationalStore.getQuerySqlInfo(predicates, columns)
-      hilog.debug(DOMAIN, TAG, `SQL:${sqlInfo.sql}，args:${sqlInfo.args || []}`);
-    }
-    const res = this.getStore().querySync(predicates, columns)
-    try {
-      return this.getData(res)
-    } finally {
-      res.close()
-    }
+    const predicates = this.buildPredicates(wrapper)
+    this.logQuery(predicates, columns)
+    const rs = this.store.querySync(predicates, columns)
+    return this.consumeResultSet(rs, () => this.rowsToEntities(rs))
   }
 
   /**
-   * 查询符合条件的记录数
-   * @throws BusinessError
-   * @param wrapper 条件构造器
-   * @returns 记录数
+   * 查询单条；无结果返回 `null`。
+   *
+   * 内部会克隆传入的 `wrapper` 后再追加 `LIMIT 1`，**不会修改调用方的 wrapper 对象**。
    */
+  selectOne(wrapper?: Wrapper, columns?: string[]): T | null {
+    const w = wrapper ? wrapper.clone() : new Wrapper()
+    const list = this.select(w.limit(1), columns)
+    return list.length > 0 ? list[0] : null
+  }
+
+  /** 计数。 */
   count(wrapper?: Wrapper): number {
-    const predicates = new relationalStore.RdbPredicates(this.params.tableName)
-    this.applyWrapper(predicates, wrapper)
-    if (RdbOrm.debugSql) {
-      const sqlInfo = relationalStore.getQuerySqlInfo(predicates, ['count(*) as total'])
-      hilog.debug(DOMAIN, TAG, `SQL:${sqlInfo.sql}，args:${sqlInfo.args || []}`);
-    }
-    const res = this.getStore().querySync(predicates, ['count(*) as total'])
-    try {
+    const predicates = this.buildPredicates(wrapper)
+    const cols: string[] = ['count(*) as __rdborm_count__']
+    this.logQuery(predicates, cols)
+    const rs = this.store.querySync(predicates, cols)
+    return this.consumeResultSet(rs, () => {
       let total = 0
-      while (res.goToNextRow()) {
-        const row = res.getRow()
-        total = Number(row['total'] ?? 0)
+      while (rs.goToNextRow()) {
+        total = Number(rs.getRow()['__rdborm_count__'] ?? 0)
       }
       return total
-    } finally {
-      res.close()
-    }
-  }
-
-  /**
-   * 向目标表中插入一行数据
-   * @throws BusinessError
-   * @param obj 实体对象
-   * @param conflict 指定冲突解决模式
-   * @returns 如果操作成功，返回行ID；否则返回-1
-   */
-  insert(obj: T, conflict?: relationalStore.ConflictResolution): number {
-    const valueBucket = this.getRecord(obj)
-    if (RdbOrm.debugSql) {
-      const sqlInfo = relationalStore.getInsertSqlInfo(this.params.tableName, valueBucket, conflict)
-      hilog.debug(DOMAIN, TAG, `SQL:${sqlInfo.sql}，args:${sqlInfo.args || []}`);
-    }
-    return this.getStore().insertSync(this.params.tableName, valueBucket, conflict)
-  }
-
-  /**
-   * 向目标表中插入一组数据
-   * @throws BusinessError
-   * @param list 实体对象数组
-   * @param conflict 指定冲突解决模式
-   * @returns 如果操作成功，返回插入的数据个数，否则返回-1
-   */
-  batchInsert(list: T[], conflict?: relationalStore.ConflictResolution): number {
-    const bucketList: relationalStore.ValuesBucket[] = []
-    list.forEach(item => {
-      bucketList.push(this.getRecord(item))
     })
+  }
+
+  // ---------- 写入 ----------
+
+  /** 插入单条。返回 `rowId`，失败为 -1。 */
+  insert(obj: T, conflict?: relationalStore.ConflictResolution): number {
+    const bucket = this.toValuesBucket(obj)
+    if (this.debug()) {
+      const info = relationalStore.getInsertSqlInfo(this.params.tableName, bucket, conflict)
+      this.logSql(info.sql, info.args)
+    }
+    return this.store.insertSync(this.params.tableName, bucket, conflict)
+  }
+
+  /** 批量插入。返回成功插入数量，失败为 -1。 */
+  batchInsert(list: T[], conflict?: relationalStore.ConflictResolution): number {
+    const buckets: relationalStore.ValuesBucket[] = []
+    for (let i = 0; i < list.length; i++) {
+      buckets.push(this.toValuesBucket(list[i]))
+    }
     if (conflict !== undefined) {
-      return this.getStore().batchInsertWithConflictResolutionSync(this.params.tableName, bucketList, conflict)
-    } else {
-      return this.getStore().batchInsertSync(this.params.tableName, bucketList)
+      return this.store.batchInsertWithConflictResolutionSync(this.params.tableName, buckets, conflict)
     }
+    return this.store.batchInsertSync(this.params.tableName, buckets)
   }
 
   /**
-   * 根据谓词条件，更新数据库中的数据
-   * @throws BusinessError
-   * @param wrapper 条件构造器，set用于更新字段，其余条件用于where
-   * @param conflict 指定冲突解决模式
-   * @returns 返回受影响的行数
+   * 按条件更新指定字段。
+   * @param values 待更新字段对象（按属性名传入，会自动映射为列名；传 `undefined` 的字段忽略，传 `null` 写入 NULL）
+   *               实体类的字段建议都声明为可选 `?`，这样可以只填要更新的字段。
+   * @param wrapper 必传，至少一条 WHERE 条件
    */
-  update(wrapper: Wrapper, conflict?: relationalStore.ConflictResolution): number {
-    const predicates = new relationalStore.RdbPredicates(this.params.tableName)
-    const valueBucket = this.getUpdateRecord(wrapper)
-    this.applyWrapper(predicates, wrapper)
-    if (RdbOrm.debugSql) {
-      const sqlInfo = relationalStore.getUpdateSqlInfo(predicates, valueBucket, conflict)
-      hilog.debug(DOMAIN, TAG, `SQL:${sqlInfo.sql}，args:${sqlInfo.args || []}`);
+  update(values: T, wrapper: Wrapper, conflict?: relationalStore.ConflictResolution): number {
+    if (!wrapper.hasWhereActions()) {
+      throw new Error('update(values, wrapper) 必须至少传入一个 WHERE 条件，避免误更新全表')
     }
-    return this.getStore().updateSync(valueBucket, predicates, conflict)
+    const bucket = this.toValuesBucket(values)
+    if (Object.keys(bucket).length === 0) {
+      throw new Error('update(values, wrapper) 的 values 必须包含至少一个被装饰过的字段')
+    }
+    const predicates = this.buildPredicates(wrapper)
+    if (this.debug()) {
+      const info = relationalStore.getUpdateSqlInfo(predicates, bucket, conflict)
+      this.logSql(info.sql, info.args)
+    }
+    return this.store.updateSync(bucket, predicates, conflict)
   }
 
   /**
-   * 根据谓词条件，从数据库中删除数据
-   * @throws BusinessError
-   * @param wrapper 条件构造器
-   * @returns 返回受影响的行数
-   */
-  delete(wrapper?: Wrapper): number {
-    const predicates = new relationalStore.RdbPredicates(this.params.tableName)
-    this.applyWrapper(predicates, wrapper)
-    if (RdbOrm.debugSql) {
-      const sqlInfo = relationalStore.getDeleteSqlInfo(predicates)
-      hilog.debug(DOMAIN, TAG, `SQL:${sqlInfo.sql}，args:${sqlInfo.args || []}`);
-    }
-    const res = this.getStore().deleteSync(predicates)
-    return res
-  }
-
-  /**
-   * 根据主键更新数据
-   * @throws BusinessError
-   * @param obj 实体对象，必须包含主键属性
-   * @param conflict 指定冲突解决模式
-   * @returns 返回受影响的行数
+   * 按主键更新整条实体。实体必须包含主键属性值。
+   *
+   * 主键列**不会**进入 SET 子句——`updateById` 顾名思义只更新除主键外的字段，
+   * 即便 entity 上同时设置了主键和其它字段，主键也只用于 WHERE 定位。
    */
   updateById(obj: T, conflict?: relationalStore.ConflictResolution): number {
-    const data: ESObject = obj
-    const bucket = this.getRecord(obj)
-    const tableId = this.getTableIdOrThrow()
-    const propertyId = this.getPropertyIdOrThrow()
-    const predicates = new relationalStore.RdbPredicates(this.params.tableName)
-    predicates.equalTo(tableId, data[propertyId])
-    if (RdbOrm.debugSql) {
-      const sqlInfo = relationalStore.getUpdateSqlInfo(predicates, bucket, conflict)
-      hilog.debug(DOMAIN, TAG, `SQL:${sqlInfo.sql}，args:${sqlInfo.args || []}`);
+    const pk = this.getPrimaryKeyOrThrow()
+    const idValue: ESObject = (obj as ESObject)[pk.property]
+    if (idValue === undefined || idValue === null) {
+      throw new Error(`updateById 缺少主键值：${pk.property}`)
     }
-    return this.getStore().updateSync(bucket, predicates, conflict)
+    const bucket = this.toValuesBucket(obj, pk.column)
+    if (Object.keys(bucket).length === 0) {
+      return 0
+    }
+    const predicates = new relationalStore.RdbPredicates(this.params.tableName)
+    predicates.equalTo(pk.column, idValue as relationalStore.ValueType)
+    if (this.debug()) {
+      const info = relationalStore.getUpdateSqlInfo(predicates, bucket, conflict)
+      this.logSql(info.sql, info.args)
+    }
+    return this.store.updateSync(bucket, predicates, conflict)
   }
 
   /**
-   * 根据主键删除数据
-   * @throws BusinessError
-   * @param id 主键值
-   * @returns 返回受影响的行数
+   * 按条件删除。`wrapper` 必须至少包含一个 WHERE 条件；要清空整张表请使用 `clear()`。
    */
+  delete(wrapper: Wrapper): number {
+    if (!wrapper.hasWhereActions()) {
+      throw new Error('delete(wrapper) 必须至少传入一个 WHERE 条件；要清空整张表请使用 clear()')
+    }
+    return this.executeDelete(this.buildPredicates(wrapper))
+  }
+
+  /** 按主键删除。 */
   deleteById(id: relationalStore.ValueType): number {
-    return this.delete(new Wrapper().eq(this.getTableIdOrThrow(), id))
+    const pk = this.getPrimaryKeyOrThrow()
+    const predicates = new relationalStore.RdbPredicates(this.params.tableName)
+    predicates.equalTo(pk.column, id)
+    return this.executeDelete(predicates)
   }
 
+  /** 清空整张表，等价于不带条件的 DELETE。 */
+  clear(): number {
+    return this.executeDelete(new relationalStore.RdbPredicates(this.params.tableName))
+  }
+
+  // ---------- 事务 ----------
 
   /**
-   * 开启事务
-   * @throws BusinessError
+   * 事务包装：`fn` 抛错时自动回滚，正常返回时提交。
+   *
+   * ⚠️ `fn` 必须是同步函数。**不要**传 async lambda 或返回 Promise。
+   * rdborm 会在运行时拒绝 Promise 返回值并回滚事务；事务体内直接调用同步 CRUD 即可。
+   *
+   * ```ts
+   * // ✅ 正确
+   * db.transaction(() => {
+   *   db.insert(a)
+   *   db.insert(b)
+   * })
+   *
+   * // ❌ 错误：会抛错并回滚
+   * db.transaction(async () => {
+   *   await fetchExternal()
+   *   db.insert(a)
+   * })
+   * ```
    */
-  beginTransaction(): void {
+  transaction<R>(fn: () => R): R {
     this.store.beginTransaction()
+    let shouldRollback = true
+    try {
+      const result = fn()
+      if (this.isPromiseLike(result as ESObject)) {
+        throw new Error('transaction(fn) 不支持 async 函数或 Promise 返回值；请在事务体内只调用同步 CRUD')
+      }
+      this.store.commit()
+      shouldRollback = false
+      return result
+    } catch (e) {
+      if (shouldRollback) {
+        this.rollbackQuietly()
+      }
+      throw e as Error
+    }
   }
 
-  /**
-   * 提交事务
-   * @throws BusinessError
-   */
-  commit(): void {
-    this.store.commit()
-  }
+  // ---------- 备份 / 关闭 ----------
 
-  /**
-   * 回滚事务
-   * @throws BusinessError
-   */
-  rollBack(): void {
-    this.store.rollBack()
-  }
-
-  /**
-   * 以指定名称备份数据库
-   * @throws BusinessError
-   */
   backup(fileName: string): Promise<void> {
     return this.store.backup(fileName)
   }
 
-  /**
-   * 从指定的数据库备份文件恢复数据库
-   * @throws BusinessError
-   */
   restore(fileName: string): Promise<void> {
     return this.store.restore(fileName)
   }
 
-  /**
-   * 关闭数据库连接
-   * @throws BusinessError
-   */
   close(): void {
     this.store.close()
   }
 
-  /**
-   * 根据实体类装饰器过滤字段
-   */
-  private getRecord(obj: T): relationalStore.ValuesBucket {
-    const data: ESObject = obj
-    const recordData: relationalStore.ValuesBucket = {}
-    Object.keys(data).forEach((key: string) => {
-      const fieldName = this.propertyToFieldMap[key]
-      if (fieldName !== undefined) {
-        recordData[fieldName] = data[key] ?? null
-      }
-    })
-    return recordData
+  // ---------- 内部工具 ----------
+
+  private debug(): boolean {
+    return this.params.buildParams.debugSql === true
+  }
+
+  private logSql(sql: string, args?: relationalStore.ValueType[]): void {
+    if (this.debug()) {
+      hilog.debug(DOMAIN, TAG, `SQL:${sql}，args:${JSON.stringify(args ?? [])}`)
+    }
+  }
+
+  private logQuery(predicates: relationalStore.RdbPredicates, columns?: string[]): void {
+    if (this.debug()) {
+      const info = relationalStore.getQuerySqlInfo(predicates, columns)
+      this.logSql(info.sql, info.args)
+    }
   }
 
   /**
-   * 结果集获取数据
-   * @throws BusinessError
+   * 把实体转成 ValueBucket，按 `@Id`/`@Field` 装饰过的属性筛选。
+   * - `undefined`：跳过（让 SQL 默认值生效）
+   * - `null`：直通（写入 SQL NULL）
+   * - 其它：原值透传，HarmonyOS 底层负责把 JS boolean 转 1/0、Date 转字符串等
+   *
+   * @param excludeColumn 可选，需要从结果中排除的列名（updateById 用来去掉主键）
    */
-  private getData(res: relationalStore.ResultSet): T[] {
+  private toValuesBucket(obj: T, excludeColumn?: string): relationalStore.ValuesBucket {
+    const bucket: relationalStore.ValuesBucket = {}
+    this.propertyToColumn.forEach((meta, property) => {
+      if (excludeColumn !== undefined && meta.column === excludeColumn) {
+        return
+      }
+      const v: ESObject = (obj as ESObject)[property]
+      if (v === undefined) {
+        return
+      }
+      if (v === null) {
+        bucket[meta.column] = null
+        return
+      }
+      bucket[meta.column] = v as relationalStore.ValueType
+    })
+    return bucket
+  }
+
+  /**
+   * ResultSet 行 → 实体对象。
+   * - 仅写回在 `propertyToColumn` 中声明过的列，未声明列被**丢弃**（2.0 行为变化，
+   *   1.0 会直接挂到返回对象上造成类型污染）。
+   * - 配了 `@Field({ enableBoolMapper: true })` 的列，把 `1`/`0` 转回 `true`/`false`；
+   *   `null` / `undefined` 直通不转换。
+   * - 其它列原值透传（HarmonyOS 内部按列类型返回 number / string / Uint8Array 等）。
+   */
+  private rowsToEntities(rs: relationalStore.ResultSet): T[] {
     const list: T[] = []
-    while (res.goToNextRow()) {
-      const entity: ESObject = new this.params.buildParams.class()
-      const row: ESObject = res.getRow()
-      Object.keys(row).forEach((key: string) => {
-        const propertyKey = this.fieldToPropertyMap[key]
-        if (propertyKey !== undefined) {
-          entity[propertyKey] = row[key]
-        } else {
-          entity[key] = row[key]
+    while (rs.goToNextRow()) {
+      const entity = new this.params.buildParams.class()
+      const row: relationalStore.ValuesBucket = rs.getRow()
+      const keys = Object.keys(row)
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i]
+        const meta = this.columnToProperty.get(key)
+        if (meta) {
+          const raw = row[key]
+          if (raw !== null && raw !== undefined && meta.enableBoolMapper) {
+            // 1/0 → true/false
+            (entity as ESObject)[meta.property] = raw === 1 || raw === true
+          } else {
+            (entity as ESObject)[meta.property] = raw
+          }
         }
-      })
+      }
       list.push(entity)
     }
     return list
   }
 
-  private initFieldMappings(): void {
-    this.params.propertyKeys.forEach((propertyKey: string, index: number) => {
-      const fieldName = this.params.fields[index]
-      this.propertyToFieldMap[propertyKey] = fieldName
-      this.fieldToPropertyMap[fieldName] = propertyKey
-    })
-  }
-
-
-  private applyWrapper(predicates: relationalStore.RdbPredicates, wrapper?: Wrapper): void {
-    if (!wrapper) {
-      return
+  private buildPredicates(wrapper?: Wrapper): relationalStore.RdbPredicates {
+    const predicates = new relationalStore.RdbPredicates(this.params.tableName)
+    if (wrapper) {
+      this.applyWrapper(predicates, wrapper)
     }
-
-    const actions = wrapper.getActions()
-    actions.forEach(action => {
-      const field = action.field
-      const fields = action.fields
-      switch (action.type) {
-        case 'set':
-          break
-        case 'inDevices':
-          predicates.inDevices(action.devices ?? [])
-          break
-        case 'inAllDevices':
-          predicates.inAllDevices()
-          break
-        case 'eq':
-          predicates.equalTo(field!, action.value!)
-          break
-        case 'notEq':
-          predicates.notEqualTo(field!, action.value!)
-          break
-        case 'or':
-          predicates.or()
-          this.applyLogicWrapper(predicates, action.wrapper)
-          break
-        case 'and':
-          predicates.and()
-          this.applyLogicWrapper(predicates, action.wrapper)
-          break
-        case 'contains':
-          predicates.contains(field!, action.value as string)
-          break
-        case 'beginsWith':
-          predicates.beginsWith(field!, action.value as string)
-          break
-        case 'endsWith':
-          predicates.endsWith(field!, action.value as string)
-          break
-        case 'isNull':
-          predicates.isNull(field!)
-          break
-        case 'isNotNull':
-          predicates.isNotNull(field!)
-          break
-        case 'like':
-          predicates.like(field!, action.value as string)
-          break
-        case 'glob':
-          predicates.glob(field!, action.value as string)
-          break
-        case 'between':
-          predicates.between(field!, action.start!, action.end!)
-          break
-        case 'notBetween':
-          predicates.notBetween(field!, action.start!, action.end!)
-          break
-        case 'lt':
-          predicates.lessThan(field!, action.value!)
-          break
-        case 'lte':
-          predicates.lessThanOrEqualTo(field!, action.value!)
-          break
-        case 'gt':
-          predicates.greaterThan(field!, action.value!)
-          break
-        case 'gte':
-          predicates.greaterThanOrEqualTo(field!, action.value!)
-          break
-        case 'orderByAsc':
-          predicates.orderByAsc(field!)
-          break
-        case 'orderByDesc':
-          predicates.orderByDesc(field!)
-          break
-        case 'distinct':
-          predicates.distinct()
-          break
-        case 'limit':
-          predicates.limitAs(action.numberValue!)
-          break
-        case 'offset':
-          predicates.offsetAs(action.numberValue!)
-          break
-        case 'groupBy':
-          predicates.groupBy(fields ?? [])
-          break
-        case 'indexedBy':
-          predicates.indexedBy(field!)
-          break
-        case 'in':
-          predicates.in(field!, action.values ?? [])
-          break
-        case 'notIn':
-          predicates.notIn(field!, action.values ?? [])
-          break
-        case 'notLike':
-          predicates.notLike(field!, action.value as string)
-          break
-        case 'having':
-          predicates.having(action.sql!, action.args)
-          break
-        case 'notContains':
-          predicates.notContains(field!, action.value as string)
-          break
-      }
-    })
+    return predicates
   }
 
-  private applyLogicWrapper(predicates: relationalStore.RdbPredicates, wrapper?: Wrapper): void {
+  /**
+   * 把 wrapper 的动作翻译到 RdbPredicates。
+   * 大多数 action 通过模块级 `ACTION_HANDLERS` 分发；`or`/`and` 需递归处理子 wrapper。
+   */
+  private applyWrapper(predicates: relationalStore.RdbPredicates, wrapper: Wrapper): void {
+    const actions = wrapper.getActions()
+    for (let i = 0; i < actions.length; i++) {
+      const action = actions[i]
+      const handler = ACTION_HANDLERS[action.type]
+      if (handler) {
+        handler(predicates, action, action.field)
+      } else if (action.type === 'or') {
+        predicates.or()
+        this.applyLogicGroup(predicates, action.wrapper)
+      } else if (action.type === 'and') {
+        predicates.and()
+        this.applyLogicGroup(predicates, action.wrapper)
+      }
+    }
+  }
+
+  private applyLogicGroup(predicates: relationalStore.RdbPredicates, wrapper?: Wrapper): void {
     if (!wrapper) {
       return
     }
@@ -456,30 +491,49 @@ export class DBHelper<T> {
     predicates.endWrap()
   }
 
-  private getUpdateRecord(wrapper: Wrapper): relationalStore.ValuesBucket {
-    const recordData: relationalStore.ValuesBucket = {}
-    wrapper.getActions().forEach(action => {
-      if (action.type === 'set' && action.field) {
-        recordData[action.field] = action.value ?? null
-      }
-    })
-    if (Object.keys(recordData).length === 0) {
-      throw new Error('update requires at least one set(...) action')
+  private executeDelete(predicates: relationalStore.RdbPredicates): number {
+    if (this.debug()) {
+      const info = relationalStore.getDeleteSqlInfo(predicates)
+      this.logSql(info.sql, info.args)
     }
-    return recordData
+    return this.store.deleteSync(predicates)
   }
 
-  private getTableIdOrThrow(): string {
-    if (!this.params.tableId) {
-      throw new Error('Primary key field is required for updateById/deleteById')
+  private consumeResultSet<R>(rs: relationalStore.ResultSet, fn: () => R): R {
+    try {
+      return fn()
+    } finally {
+      rs.close()
     }
-    return this.params.tableId
   }
 
-  private getPropertyIdOrThrow(): string {
-    if (!this.params.propertyId) {
-      throw new Error('Primary key field is required for updateById/deleteById')
+  private getPrimaryKeyOrThrow(): ColumnMeta {
+    const pk = this.params.primaryKey
+    if (!pk) {
+      const className = (this.params.buildParams.class as ESObject).name as string
+      throw new Error(`实体类 ${className} 未声明主键，updateById/deleteById 不可用，请使用 @Id`)
     }
-    return this.params.propertyId
+    return pk
+  }
+
+  private buildCreateTableSql(): string {
+    const cols: string[] = []
+    for (let i = 0; i < this.params.columns.length; i++) {
+      cols.push(buildColumnDefSql(this.params.columns[i]))
+    }
+    return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(this.params.tableName)} (\n  ${cols.join(',\n  ')}\n)`
+  }
+
+  private isPromiseLike(value: ESObject): boolean {
+    return value !== null && value !== undefined && typeof value.then === 'function'
+  }
+
+  private rollbackQuietly(): void {
+    try {
+      this.store.rollBack()
+    } catch (rollbackErr) {
+      const msg = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)
+      hilog.error(DOMAIN, TAG, 'rollBack 失败：%{public}s', msg)
+    }
   }
 }

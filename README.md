@@ -1,64 +1,51 @@
+<!-- 根目录 README.md 与 rdborm/README.md 保持完全一致，编辑后请运行：cp README.md rdborm/README.md -->
+
 # RdbOrm
 
-轻量级 RDB ORM，使用装饰器完成实体映射，构造查询条件，简单无需SQL操作。  
+轻量级 RDB ORM，使用装饰器完成实体映射，链式构造查询条件，零 SQL 即可完成增删改查。
+
 联系邮箱 121887765@qq.com
 
-## 特性
+## 安装
 
-- 使用 `@Table`、`@Field` 维护表名和字段映射
-- 通过 `RdbOrm.build()` 创建表级操作对象
-- 通过 `DBHelper` 执行增删改查、事务、备份恢复
-- 通过 `Wrapper` 链式拼接查询与更新条件
-- 可开启 `RdbOrm.debugSql` 输出 SQL 调试日志
+```bash
+ohpm i @dims/rdborm
+```
 
-## 下载安装
-
-1. 安装最新版 `ohpm i @dims/rdborm`
-2. 升级版本 `ohpm update @dims/rdborm`，建议使用最新版避免bug
-
-OpenHarmony ohpm
-环境配置等更多内容，请参考[如何安装 OpenHarmony ohpm 包](https://ohpm.openharmony.cn/#/cn/help/downloadandinstall)
-
-[工程版本升级教程](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/ide-integrated-project-migration)
-
-## 完整流程
+## 快速开始
 
 ### 1. 定义实体
 
-使用 `@Table` 声明表名，使用 `@Field` 声明字段映射。
+`@Table` 声明表名，`@Field` 声明列，`@Id` 标主键，二者叠加使用。
 
 ```ts
-import { Field, Table } from '@dims/rdborm'
+import { Field, Id, Table } from '@dims/rdborm'
 
-@Table('t_emp')
-export class Employee {
-  @Field({ id: true })
+@Table('t_user')
+class User {
+  @Field({ type: 'INTEGER' })
+  @Id()
   id?: number
 
-  @Field()
-  age?: number
-
-  @Field()
+  @Field({ type: 'TEXT' })
   name?: string
 
-  @Field()
-  salary?: number
-
-  @Field({ name: 'is_on_job' })
-  onJob?: boolean
-
-  constructor() {
-  }
+  @Field({ type: 'INTEGER' })
+  age?: number
 }
 ```
 
-说明：
+**装饰器说明**：
 
-- `@Table('t_emp')` 对应数据库表名。
-- `@Field()` 使用属性名作为字段名。
-- `@Field({ name: 'xxx' })` 可指定数据库字段名。
-- `@Field({ id: true })` 标记主键字段，供 `updateById`、`deleteById` 使用。
-- 未添加 `@Field` 的属性不会参与插入和实体映射。
+| 装饰器 | 作用 |
+|---|---|
+| `@Table('name')` | 绑定数据库表名 |
+| `@Field({ ... })` | 声明列。`type` 决定 SQL 类型（`INTEGER` / `TEXT` / `REAL` / `BLOB`），省略时默认 `TEXT`；`name` 可指定列名，省略时取属性名；`nullable` / `defaultValue` / `unique` 用于建表；布尔字段可加 `enableBoolMapper: true`（见下文） |
+| `@Id()` | 标注主键。仅一个可选参数 `autoIncrement`（默认 `true`，非 INTEGER 主键自动忽略）。叠加顺序任意（`@Field @Id` 或 `@Id @Field`） |
+
+单独使用 `@Id()` 不叠加 `@Field` 时，等价 `INTEGER PRIMARY KEY AUTOINCREMENT`。
+
+字符串主键（UUID）写法：`@Field({ type: 'TEXT' }) @Id() id?: string`
 
 ### 2. 构建 ORM 对象
 
@@ -66,398 +53,153 @@ export class Employee {
 import { RdbOrm } from '@dims/rdborm'
 import { relationalStore } from '@kit.ArkData'
 
-const orm = RdbOrm.build<Employee>({
+const orm = RdbOrm.build<User>({
   context: getContext(),
-  class: Employee,
+  class: User,
   config: {
-    name: 'RdbTest.db',
-    securityLevel: relationalStore.SecurityLevel.S3
-  }
+    name: 'app.db',
+    securityLevel: relationalStore.SecurityLevel.S3,
+  },
+  debugSql: true, // 可选，通过 hilog 输出 SQL
 })
 ```
 
-说明：
-
-- `class` 传实体类本身，不是实例。
-- `context` 一般传 `getContext()`。
-- `config` 是 HarmonyOS RDB 的 `StoreConfig`。
-
-### 3. 获取 DBHelper
+### 3. 获取操作对象
 
 ```ts
 const db = await orm.getDBHelper()
 ```
 
-如果在 taskpool 或特殊上下文中，也可以显式传入 `context`：
-
-```ts
-const db = await orm.getDBHelper(context)
-```
-
 ### 4. 建表
 
-当前项目没有自动建表功能，需要自己执行建表 SQL。
-
 ```ts
-db.executeSql(`
-  create table if not exists t_emp (
-    id integer primary key autoincrement,
-    age integer,
-    name text,
-    salary double,
-    is_on_job integer
-  )
-`)
+db.createTable()
+// => CREATE TABLE IF NOT EXISTS "t_user" (
+//      "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+//      "name" TEXT,
+//      "age" INTEGER
+//    )
 ```
 
-### 5. 插入数据
+### 5. 增删改查
 
 ```ts
-const emp = new Employee()
-emp.age = 24
-emp.name = 'Tom'
-emp.salary = 12000
-emp.onJob = true
+// 插入
+const user = new User()
+user.name = 'Alice'
+user.age = 20
+const rowId = db.insert(user)
 
-const rowId = db.insert(emp)
-```
+// 批量插入
+db.batchInsert([user1, user2])
 
-批量插入：
+// 查询全部
+db.select()
 
-```ts
-const list: Employee[] = []
-
-const e1 = new Employee()
-e1.name = 'Tom'
-e1.age = 24
-list.push(e1)
-
-const e2 = new Employee()
-e2.name = 'Lucy'
-e2.age = 28
-list.push(e2)
-
-const count = db.batchInsert(list)
-```
-
-### 6. 查询数据
-
-查询全部：
-
-```ts
-const allList = db.select()
-```
-
-带条件查询：
-
-```ts
-const list = db.select(
-  new Wrapper()
-    .gte('age', 18)
-    .like('name', '%o%')
-    .orderByDesc('id')
-    .limit(20)
+// 条件查询
+import { Wrapper } from '@dims/rdborm'
+db.select(
+  new Wrapper().gte('age', 18).orderByDesc('id').limit(10)
 )
+
+// 查询单条（无结果返回 null）
+db.selectOne(new Wrapper().eq('id', 1))
+
+// 统计
+db.count(new Wrapper().gte('age', 18))
+
+// 按条件更新
+const vals = new User()
+vals.name = 'Bob'
+db.update(vals, new Wrapper().eq('id', 1))
+
+// 按主键更新
+user.name = 'Charlie'
+db.updateById(user)
+
+// 按条件删除（wrapper 必传，避免误删全表）
+db.delete(new Wrapper().lt('age', 18))
+
+// 按主键删除
+db.deleteById(1)
+
+// 清空全表
+db.clear()
+
+// 事务（抛错自动回滚）
+db.transaction(() => {
+  db.insert(user1)
+  db.insert(user2)
+})
+
+// 原生 SQL
+db.executeSql('ALTER TABLE "t_user" ADD COLUMN "email" TEXT')
+db.querySql('SELECT * FROM "t_user" WHERE age > ?', [18])
 ```
 
-指定查询列：
+## Wrapper 常用方法
+
+Wrapper 用于构造查询条件，方法均支持链式调用。`field` 参数永远是**数据库列名**。每个方法最后一个 `condition?: boolean` 参数可用于动态拼接。
+
+| 分类 | 方法 | 说明 |
+|---|---|---|
+| 比较 | `eq` `notEq` `lt` `lte` `gt` `gte` | 值比较 |
+| | `between` `notBetween` | 区间 |
+| | `in` `notIn` | 集合 |
+| | `isNull` `isNotNull` | NULL 检查 |
+| 字符串 | `like` `notLike` `glob` | 模式匹配 |
+| | `contains` `notContains` `beginsWith` `endsWith` | 子串 |
+| 排序分页 | `orderByAsc` `orderByDesc` `distinct` `limit` `offset` | |
+| 分组 | `groupBy` `having` | |
+| 逻辑 | `or` `and` | 嵌套 Wrapper |
+| 工具 | `clone` | 浅拷贝 |
+
+## Boolean 字段读取转换
+
+SQLite 没有原生 boolean 类型，HarmonyOS 底层负责处理写入与查询条件中的 `true`/`false` ↔ `1`/`0`。唯一不闭环的是**读取**：`db.select()` 拿到的对象里 boolean 字段是 `number`。
+
+`@Field({ enableBoolMapper: true })` 解决这段——rdborm 在读取时把 `1`/`0` 转回 `true`/`false`：
 
 ```ts
-const list = db.select(
-  new Wrapper().orderByAsc('id'),
-  ['id', 'name', 'age']
-)
+@Field({ type: 'INTEGER', enableBoolMapper: true })
+onJob?: boolean
+
+// 写入与查询 HarmonyOS 底层处理，直接传 true/false：
+user.onJob = true
+db.insert(user)
+db.select(new Wrapper().eq('onJob', true))
+
+// 读取自动转 boolean：
+const list = db.select()
+console.log(typeof list[0].onJob) // 'boolean'
 ```
 
-统计数量：
+`null` / `undefined` 直通不转换。列类型必须是 `INTEGER`，主键列上写该选项会被忽略。
+
+## 其他常用 API
+
+`dropTable()` `backup(fileName)` `restore(fileName)` `close()` `getVersion()` `setVersion(v)` `getStore()`
+
+## TaskPool
+
+每个 worker 需独立 `RdbOrm.build`，`debugSql` 在 build 时显式传入：
 
 ```ts
-const total = db.count(new Wrapper().eq('is_on_job', true))
-```
-
-原生 SQL 查询：
-
-```ts
-const rows = db.querySql(
-  'select id, name from t_emp where age > ?',
-  [18]
-)
-```
-
-### 7. 更新数据
-
-按条件更新：
-
-```ts
-const affectRows = db.update(
-  new Wrapper()
-    .set('name', 'New Name')
-    .set('age', 30)
-    .eq('id', 1)
-)
-```
-
-按主键更新：
-
-```ts
-const emp = new Employee()
-emp.id = 1
-emp.name = 'Tom'
-emp.age = 25
-
-const affectRows = db.updateById(emp)
-```
-
-### 8. 删除数据
-
-按条件删除：
-
-```ts
-const affectRows = db.delete(new Wrapper().lt('age', 18))
-```
-
-按主键删除：
-
-```ts
-const affectRows = db.deleteById(1)
-```
-
-### 9. 事务
-
-```ts
-db.beginTransaction()
-try {
-  db.insert(emp1)
-  db.insert(emp2)
-  db.commit()
-} catch (error) {
-  db.rollBack()
-  throw error
+@Concurrent
+async function queryInWorker(context: Context): Promise<string> {
+  const orm = RdbOrm.build<User>({ context, class: User, config: {...}, debugSql: true })
+  const db = await orm.getDBHelper()
+  return JSON.stringify(db.select())
 }
-```
-
-### 10. 备份、恢复、关闭
-
-```ts
-await db.backup('RdbTest.db.bak')
-await db.restore('RdbTest.db.bak')
-db.close()
-```
-
-## 调试日志
-
-开启 SQL 日志：
-
-```ts
-RdbOrm.debugSql = true
-```
-
-开启后，`executeSql`、`querySql`、`select`、`count`、`insert`、`update`、`updateById`、`delete` 等会通过 `hilog` 输出 SQL 与参数。
-
-## DBHelper 函数表
-
-| 方法                                     | 参数                               | 返回值                        | 说明                               |
-|----------------------------------------|----------------------------------|----------------------------|----------------------------------|
-| `DBHelper.create<T>(params, context?)` | `TableParams<T>`, `Context?`     | `Promise<DBHelper<T>>`     | 创建一个新的数据库帮助对象                    |
-| `getVersion()`                         | 无                                | `number`                   | 获取数据库版本                          |
-| `updateVersion(v)`                     | `number`                         | `void`                     | 更新数据库版本                          |
-| `getStore()`                           | 无                                | `relationalStore.RdbStore` | 获取底层 `RdbStore`                  |
-| `executeSql(sql, args?)`               | `string`, `ValueType[]?`         | `ValueType`                | 执行原生 SQL                         |
-| `querySql(sql, args?)`                 | `string`, `ValueType[]?`         | `ValuesBucket[]`           | 执行原生查询 SQL，返回原始结果                |
-| `select(wrapper?, columns?)`           | `Wrapper?`, `string[]?`          | `T[]`                      | 按条件查询实体列表                        |
-| `count(wrapper?)`                      | `Wrapper?`                       | `number`                   | 查询记录数                            |
-| `insert(obj, conflict?)`               | `T`, `ConflictResolution?`       | `number`                   | 插入单条数据，成功时返回行 ID                 |
-| `batchInsert(list, conflict?)`         | `T[]`, `ConflictResolution?`     | `number`                   | 批量插入，成功时返回插入数量                   |
-| `update(wrapper, conflict?)`           | `Wrapper`, `ConflictResolution?` | `number`                   | 按条件更新，`Wrapper` 中必须包含 `set(...)` |
-| `delete(wrapper?)`                     | `Wrapper?`                       | `number`                   | 按条件删除；不传条件时会删除整表数据               |
-| `updateById(obj, conflict?)`           | `T`, `ConflictResolution?`       | `number`                   | 按主键更新实体，实体必须包含主键属性值              |
-| `deleteById(id)`                       | `ValueType`                      | `number`                   | 按主键删除，要求实体定义主键字段                 |
-| `beginTransaction()`                   | 无                                | `void`                     | 开启事务                             |
-| `commit()`                             | 无                                | `void`                     | 提交事务                             |
-| `rollBack()`                           | 无                                | `void`                     | 回滚事务                             |
-| `backup(fileName)`                     | `string`                         | `Promise<void>`            | 备份数据库                            |
-| `restore(fileName)`                    | `string`                         | `Promise<void>`            | 恢复数据库                            |
-| `close()`                              | 无                                | `void`                     | 关闭数据库连接                          |
-
-## Wrapper 函数表
-
-`Wrapper` 用于构造查询条件、排序、分页、更新字段和逻辑分组，方法均支持链式调用。
-
-### 基础方法
-
-| 方法                              | 参数                                | 说明           |
-|---------------------------------|-----------------------------------|--------------|
-| `getActions()`                  | 无                                 | 获取内部动作列表的浅拷贝 |
-| `set(field, value, condition?)` | `string`, `ValueType`, `boolean?` | 更新时设置字段值     |
-
-### 比较条件
-
-| 方法                                          | 参数                                             | 说明          |
-|---------------------------------------------|------------------------------------------------|-------------|
-| `eq(field, value, condition?)`              | `string`, `ValueType`, `boolean?`              | 等于          |
-| `notEq(field, value, condition?)`           | `string`, `ValueType`, `boolean?`              | 不等于         |
-| `lt(field, value, condition?)`              | `string`, `ValueType`, `boolean?`              | 小于          |
-| `lte(field, value, condition?)`             | `string`, `ValueType`, `boolean?`              | 小于等于        |
-| `gt(field, value, condition?)`              | `string`, `ValueType`, `boolean?`              | 大于          |
-| `gte(field, value, condition?)`             | `string`, `ValueType`, `boolean?`              | 大于等于        |
-| `between(field, start, end, condition?)`    | `string`, `ValueType`, `ValueType`, `boolean?` | 区间匹配        |
-| `notBetween(field, start, end, condition?)` | `string`, `ValueType`, `ValueType`, `boolean?` | 非区间匹配       |
-| `in(field, value, condition?)`              | `string`, `ValueType[]`, `boolean?`            | 在集合中        |
-| `notIn(field, value, condition?)`           | `string`, `ValueType[]`, `boolean?`            | 不在集合中       |
-| `isNull(field, condition?)`                 | `string`, `boolean?`                           | 字段为 `null`  |
-| `isNotNull(field, condition?)`              | `string`, `boolean?`                           | 字段不为 `null` |
-
-### 字符串条件
-
-| 方法                                      | 参数                             | 说明          |
-|-----------------------------------------|--------------------------------|-------------|
-| `contains(field, value, condition?)`    | `string`, `string`, `boolean?` | 包含字符串       |
-| `notContains(field, value, condition?)` | `string`, `string`, `boolean?` | 不包含字符串      |
-| `beginsWith(field, value, condition?)`  | `string`, `string`, `boolean?` | 以字符串开头      |
-| `endsWith(field, value, condition?)`    | `string`, `string`, `boolean?` | 以字符串结尾      |
-| `like(field, value, condition?)`        | `string`, `string`, `boolean?` | `LIKE` 模糊查询 |
-| `notLike(field, value, condition?)`     | `string`, `string`, `boolean?` | `NOT LIKE`  |
-| `glob(field, value, condition?)`        | `string`, `string`, `boolean?` | `GLOB` 匹配   |
-
-### 排序、分页、分组
-
-| 方法                                          | 参数                                             | 说明      |
-|---------------------------------------------|------------------------------------------------|---------|
-| `orderByAsc(field, condition?)`             | `string`, `boolean?`                           | 升序排序    |
-| `orderByDesc(field, condition?)`            | `string`, `boolean?`                           | 降序排序    |
-| `distinct(condition?)`                      | `boolean?`                                     | 去重      |
-| `limit(value, condition?)`                  | `number`, `boolean?`                           | 限制返回数量  |
-| `offset(value, condition?)`                 | `number`, `boolean?`                           | 设置偏移量   |
-| `groupBy(fields, condition?)`               | `string \| string[]`, `boolean?`               | 分组      |
-| `having(sql, argsOrCondition?, condition?)` | `string`, `ValueType[] \| boolean`, `boolean?` | 分组后过滤条件 |
-| `indexedBy(field, condition?)`              | `string`, `boolean?`                           | 指定索引列   |
-
-### 逻辑条件
-
-| 方法                         | 参数                    | 说明                 |
-|----------------------------|-----------------------|--------------------|
-| `or(wrapper, condition?)`  | `Wrapper`, `boolean?` | 追加 `OR (...)` 逻辑块  |
-| `and(wrapper, condition?)` | `Wrapper`, `boolean?` | 追加 `AND (...)` 逻辑块 |
-
-### 分布式设备条件
-
-| 方法                               | 参数                     | 说明        |
-|----------------------------------|------------------------|-----------|
-| `inDevices(devices, condition?)` | `string[]`, `boolean?` | 指定同步设备    |
-| `inAllDevices(condition?)`       | `boolean?`             | 指定所有已连接设备 |
-
-## Wrapper 示例
-
-### 条件查询
-
-```ts
-const wrapper = new Wrapper()
-  .gte('age', 18)
-  .lte('age', 35)
-  .eq('is_on_job', true)
-  .orderByDesc('id')
-  .limit(10)
-
-const list = db.select(wrapper)
-```
-
-### 逻辑分组
-
-```ts
-const wrapper = new Wrapper()
-  .eq('is_on_job', true)
-  .and(
-    new Wrapper()
-      .gte('age', 18)
-      .lte('age', 30)
-  )
-  .or(
-    new Wrapper()
-      .like('name', '%Tom%')
-  )
-```
-
-### 条件更新
-
-```ts
-const wrapper = new Wrapper()
-  .set('name', 'Jerry')
-  .set('salary', 15000)
-  .eq('id', 1)
-
-db.update(wrapper)
-```
-
-### 动态条件拼接
-
-所有 `Wrapper` 方法都支持最后一个 `condition?: boolean` 参数，可用于按条件决定是否拼接：
-
-```ts
-const hasName = true
-const hasAge = false
-
-const wrapper = new Wrapper()
-  .like('name', '%Tom%', hasName)
-  .gte('age', 18, hasAge)
-  .orderByDesc('id')
+const result = await taskpool.execute(queryInWorker, getContext())
 ```
 
 ## 实际行为说明
 
-根据当前实现，使用时建议注意以下几点：
-
-- 需要先自行建表，实体装饰器只负责映射，不负责自动建表。
-- `delete()` 不传条件时会删除当前表的全部数据，使用前请确认。
-- `update()` 的 `Wrapper` 必须至少包含一个 `set(...)`，否则会抛错。
-- `updateById()` 和 `deleteById()` 依赖主键字段，实体中必须有 `@Field({ id: true })`。
-- `updateById(obj)` 会使用实体主键属性作为查询条件，并更新已映射字段。
-- `select(columns)` 支持指定查询列；如果查询结果中包含未映射到实体字段的列，当前实现会直接挂到返回对象上。
-- 插入或按主键更新时，只会处理实体实例中当前存在且带 `@Field` 的属性。
-
-## 最小示例
-
-```ts
-import { relationalStore } from '@kit.ArkData'
-import { Field, RdbOrm, Table, Wrapper } from '@dims/rdborm'
-
-@Table('t_user')
-class User {
-  @Field({ id: true })
-  id?: number
-
-  @Field()
-  name?: string
-
-  @Field()
-  age?: number
-}
-
-async function demo(context: Context) {
-  const orm = RdbOrm.build<User>({
-    context,
-    class: User,
-    config: {
-      name: 'demo.db',
-      securityLevel: relationalStore.SecurityLevel.S3
-    }
-  })
-
-  const db = await orm.getDBHelper()
-
-  db.executeSql(`
-    create table if not exists t_user (
-      id integer primary key autoincrement,
-      name text,
-      age integer
-    )
-  `)
-
-  const user = new User()
-  user.name = 'Alice'
-  user.age = 20
-  db.insert(user)
-
-  const list = db.select(new Wrapper().gte('age', 18).orderByDesc('id'))
-  return list
-}
-```
+- 装饰器校验在 `RdbOrm.build` 阶段立即执行，重复声明、表名为空、列重复等会抛错（信息含类名）。
+- `delete(wrapper)` 与 `update(values, wrapper)` 必须含至少一个 WHERE 条件，否则抛错；`clear()` 用于清空全表。
+- 行 → 实体映射只处理装饰器声明过的列，未声明列被丢弃。
+- 插入 / 更新只处理已赋值的装饰器字段，`undefined` 跳过。
+- `selectOne` 会先克隆 wrapper 再追加 `LIMIT 1`，不修改调用方对象。
+- `transaction(fn)` 不接受 async 函数或 Promise 返回值。
+- `Wrapper.in('col', [..., null])` 中的 `null` **不会**匹配 `col IS NULL` 的行（SQL 三值逻辑），需显式 `.or(isNull('col'))` 拼分支。

@@ -1,41 +1,40 @@
-import { relationalStore } from "@kit.ArkData"
+import { relationalStore } from '@kit.ArkData'
 
-type WrapperActionType =
-  | 'set'
+export type WrapperActionType =
   | 'inDevices'
-  | 'inAllDevices'
-  | 'eq'
-  | 'notEq'
-  | 'or'
-  | 'and'
-  | 'contains'
-  | 'beginsWith'
-  | 'endsWith'
-  | 'isNull'
-  | 'isNotNull'
-  | 'like'
-  | 'glob'
-  | 'between'
-  | 'notBetween'
-  | 'lt'
-  | 'lte'
-  | 'gt'
-  | 'gte'
-  | 'orderByAsc'
-  | 'orderByDesc'
-  | 'distinct'
-  | 'limit'
-  | 'offset'
-  | 'groupBy'
-  | 'indexedBy'
-  | 'in'
-  | 'notIn'
-  | 'notLike'
-  | 'having'
-  | 'notContains'
+    | 'inAllDevices'
+    | 'eq'
+    | 'notEq'
+    | 'or'
+    | 'and'
+    | 'contains'
+    | 'beginsWith'
+    | 'endsWith'
+    | 'isNull'
+    | 'isNotNull'
+    | 'like'
+    | 'glob'
+    | 'between'
+    | 'notBetween'
+    | 'lt'
+    | 'lte'
+    | 'gt'
+    | 'gte'
+    | 'orderByAsc'
+    | 'orderByDesc'
+    | 'distinct'
+    | 'limit'
+    | 'offset'
+    | 'groupBy'
+    | 'indexedBy'
+    | 'in'
+    | 'notIn'
+    | 'notLike'
+    | 'having'
+    | 'notContains'
 
 /**
- * 条件实体
+ * 单条条件动作
  */
 export interface WrapperAction {
   type: WrapperActionType
@@ -53,143 +52,125 @@ export interface WrapperAction {
 }
 
 /**
- * 构造查询参数
+ * Wrapper 中所有"值比较"类 action 类型（eq / lt / like / between / in / isNull 等），
+ * 用于 `hasWhereActions()` 判断当前 wrapper 是否实际承载查询条件。
+ *
+ * **维护规则**：给 Wrapper 新增一个"值比较"类方法时，必须在下面列表中加对应的 type 字符串。
+ * `or` / `and` 不属于此列表——它们由 `hasWhereActions()` 单独递归处理子 wrapper。
+ */
+const WRAPPER_WHERE_SET: Set<string> = new Set([
+  'eq', 'notEq', 'contains', 'notContains', 'beginsWith', 'endsWith',
+  'isNull', 'isNotNull', 'like', 'notLike', 'glob',
+  'between', 'notBetween', 'lt', 'lte', 'gt', 'gte', 'in', 'notIn',
+])
+
+/**
+ * 链式查询条件构造器
+ *
+ * 仅承载 WHERE / ORDER / LIMIT / 分组 / 逻辑组合等查询语义；
+ * UPDATE 的字段值通过 `DBHelper.update(values, wrapper)` 的第一个参数传入。
+ *
+ * **`field` 参数命名空间**：所有方法的 `field: string` 参数都是**数据库列名**
+ * （即 `@Field({ name: 'xxx' })` 重命名之后那个 `xxx`），不是 TS 属性名。
+ * 没指定 `name:` 时列名等于属性名，看起来"传属性名"也对；但一旦配了 `@Field({ name })`
+ * 重命名，必须改用列名，否则 SQL 找不到列，读取时的 enableBoolMapper 也不会生效。
  */
 export class Wrapper {
   private actions: WrapperAction[] = []
 
-  constructor() {
-  }
-
+  /** 仅供 DBHelper 内部读取，外部不应修改返回值 */
   getActions(): WrapperAction[] {
-    return [...this.actions]
+    return this.actions.slice()
   }
 
+  /**
+   * 当前 Wrapper 是否至少包含一个 WHERE 条件（eq / lt / like / between / in / isNull 等值比较动作，
+   * 含递归检查 `or` / `and` 子 wrapper）。
+   *
+   * `DBHelper.update` 与 `delete` 用它检测"用了 wrapper 但没加条件"的误用模式，
+   * 替代之前分散在 DBHelper 中需要同步维护的 `WHERE_ACTIONS` 硬编码列表。
+   */
+  hasWhereActions(): boolean {
+    for (let i = 0; i < this.actions.length; i++) {
+      const t = this.actions[i].type
+      if (t === 'or' || t === 'and') {
+        const sub = this.actions[i].wrapper
+        if (sub && sub.hasWhereActions()) {
+          return true
+        }
+      } else if (WRAPPER_WHERE_SET.has(t)) {
+        return true
+      }
+    }
+    return false
+  }
 
-  private pushAction(action: WrapperAction, condition: boolean = true): Wrapper {
+  /**
+   * 浅拷贝当前 Wrapper（actions 数组拷贝，单个 action 引用共享）。
+   * 用于在不污染调用方对象的前提下追加额外条件，例如 selectOne 内部的 LIMIT 1。
+   */
+  clone(): Wrapper {
+    const fresh = new Wrapper()
+    fresh.pushAll(this.actions)
+    return fresh
+  }
+
+  private pushAll(actions: WrapperAction[]): void {
+    for (let i = 0; i < actions.length; i++) {
+      this.actions.push(actions[i])
+    }
+  }
+
+  private push(action: WrapperAction, condition: boolean): Wrapper {
     if (condition) {
       this.actions.push(action)
     }
     return this
   }
 
-  /**
-   * update set 修改某字段
-   * @param field 字段
-   * @param value 值
-   * @returns Wrapper
-   */
-  set(field: string, value: relationalStore.ValueType, condition: boolean = true) {
-    return this.pushAction({ type: 'set', field, value }, condition)
-  }
-
-  /**
-   * 指定分布式数据库同步设备
-   * @param devices 设备列表
-   * @returns Wrapper
-   */
   inDevices(devices: string[], condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'inDevices', devices }, condition)
+    return this.push({ type: 'inDevices', devices }, condition)
   }
 
-  /**
-   * 指定所有已连接设备
-   * @returns Wrapper
-   */
   inAllDevices(condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'inAllDevices' }, condition)
+    return this.push({ type: 'inAllDevices' }, condition)
   }
 
-  /**
-   * 等于
-   * @param field 字段
-   * @param value 值
-   * @returns Wrapper
-   */
   eq(field: string, value: relationalStore.ValueType, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'eq', field, value }, condition)
+    return this.push({ type: 'eq', field, value }, condition)
   }
 
-  /**
-   * 不等于
-   * @param field 字段
-   * @param value 值
-   * @returns Wrapper
-   */
   notEq(field: string, value: relationalStore.ValueType, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'notEq', field, value }, condition)
+    return this.push({ type: 'notEq', field, value }, condition)
   }
 
-  /**
-   * 字段的值，在给定的集合中
-   * @param field 字段
-   * @param value 值的数组
-   * @returns Wrapper
-   */
   in(field: string, value: relationalStore.ValueType[], condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'in', field, values: value }, condition)
+    return this.push({ type: 'in', field, values: value }, condition)
   }
 
-  /**
-   * 字段的值，不在给定的集合中
-   * @param field 字段
-   * @param value 值的数组
-   * @returns Wrapper
-   */
   notIn(field: string, value: relationalStore.ValueType[], condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'notIn', field, values: value }, condition)
+    return this.push({ type: 'notIn', field, values: value }, condition)
   }
 
-  /**
-   * 小于
-   * @param field 字段
-   * @param value 值
-   * @returns Wrapper
-   */
   lt(field: string, value: relationalStore.ValueType, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'lt', field, value }, condition)
+    return this.push({ type: 'lt', field, value }, condition)
   }
 
-  /**
-   * 小于等于
-   * @param field 字段
-   * @param value 值
-   * @returns Wrapper
-   */
   lte(field: string, value: relationalStore.ValueType, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'lte', field, value }, condition)
+    return this.push({ type: 'lte', field, value }, condition)
   }
 
-  /**
-   * 大于
-   * @param field 字段
-   * @param value 值
-   * @returns Wrapper
-   */
   gt(field: string, value: relationalStore.ValueType, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'gt', field, value }, condition)
+    return this.push({ type: 'gt', field, value }, condition)
   }
 
-  /**
-   * 大于等于
-   * @param field 字段
-   * @param value 值
-   * @returns Wrapper
-   */
   gte(field: string, value: relationalStore.ValueType, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'gte', field, value }, condition)
+    return this.push({ type: 'gte', field, value }, condition)
   }
 
-  /**
-   * 设置单个字段的 BETWEEN 条件
-   * @param field 字段
-   * @param start 起始值
-   * @param end 结束值
-   * @returns Wrapper
-   */
   between(field: string, start: relationalStore.ValueType, end: relationalStore.ValueType,
     condition: boolean = true): Wrapper {
-    return this.pushAction({
+    return this.push({
       type: 'between',
       field,
       start,
@@ -197,16 +178,9 @@ export class Wrapper {
     }, condition)
   }
 
-  /**
-   * 设置单个字段的 NOT BETWEEN 条件
-   * @param field 字段
-   * @param start 起始值
-   * @param end 结束值
-   * @returns Wrapper
-   */
   notBetween(field: string, start: relationalStore.ValueType, end: relationalStore.ValueType,
     condition: boolean = true): Wrapper {
-    return this.pushAction({
+    return this.push({
       type: 'notBetween',
       field,
       start,
@@ -214,161 +188,85 @@ export class Wrapper {
     }, condition)
   }
 
-  /**
-   * 包含指定字符串
-   * @param field 字段
-   * @param value 值
-   * @returns Wrapper
-   */
   contains(field: string, value: string, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'contains', field, value }, condition)
+    return this.push({ type: 'contains', field, value }, condition)
   }
 
-  /**
-   * 不包含指定字符串
-   * @param field 字段
-   * @param value 值
-   * @returns Wrapper
-   */
   notContains(field: string, value: string, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'notContains', field, value }, condition)
+    return this.push({ type: 'notContains', field, value }, condition)
   }
 
-  /**
-   * 以指定字符串开头
-   * @param field 字段
-   * @param value 值
-   * @returns Wrapper
-   */
   beginsWith(field: string, value: string, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'beginsWith', field, value }, condition)
+    return this.push({ type: 'beginsWith', field, value }, condition)
   }
 
-  /**
-   * 以指定字符串结尾
-   * @param field 字段
-   * @param value 值
-   * @returns Wrapper
-   */
   endsWith(field: string, value: string, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'endsWith', field, value }, condition)
+    return this.push({ type: 'endsWith', field, value }, condition)
   }
 
-  /**
-   * 单个字段的模糊匹配条件
-   * @param field 字段
-   * @param value 值
-   * @returns Wrapper
-   */
   like(field: string, value: string, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'like', field, value }, condition)
+    return this.push({ type: 'like', field, value }, condition)
   }
 
-  /**
-   * 单个字段的非模糊匹配条件
-   * @param field 字段
-   * @param value 值
-   * @returns Wrapper
-   */
   notLike(field: string, value: string, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'notLike', field, value }, condition)
+    return this.push({ type: 'notLike', field, value }, condition)
   }
 
-  /**
-   * 通配符匹配，大小写敏感
-   * @param field 字段
-   * @param value 值
-   * @returns Wrapper
-   */
   glob(field: string, value: string, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'glob', field, value }, condition)
+    return this.push({ type: 'glob', field, value }, condition)
   }
 
-  /**
-   * 单个字段为null
-   * @param field 字段
-   * @returns Wrapper
-   */
   isNull(field: string, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'isNull', field }, condition)
+    return this.push({ type: 'isNull', field }, condition)
   }
 
-  /**
-   * 单个字段不为null
-   * @param field 字段
-   * @returns Wrapper
-   */
   isNotNull(field: string, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'isNotNull', field }, condition)
+    return this.push({ type: 'isNotNull', field }, condition)
   }
 
-  /**
-   * 对某字段排序-升序。可以调用多次，按顺序拼接SQL
-   * @param field 字段
-   * @returns Wrapper
-   */
   orderByAsc(field: string, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'orderByAsc', field }, condition)
+    return this.push({ type: 'orderByAsc', field }, condition)
   }
 
-  /**
-   * 对某字段排序-降序。可以调用多次，按顺序拼接SQL
-   * @param field 字段
-   * @returns Wrapper
-   */
   orderByDesc(field: string, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'orderByDesc', field }, condition)
+    return this.push({ type: 'orderByDesc', field }, condition)
   }
 
-  /**
-   * 去重查询
-   * @returns Wrapper
-   */
   distinct(condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'distinct' }, condition)
+    return this.push({ type: 'distinct' }, condition)
   }
 
-  /**
-   * 限制返回记录数
-   * @param value 数量
-   * @returns Wrapper
-   */
   limit(value: number, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'limit', numberValue: value }, condition)
+    return this.push({ type: 'limit', numberValue: value }, condition)
   }
 
-  /**
-   * 设置结果偏移量
-   * @param value 偏移量
-   * @returns Wrapper
-   */
   offset(value: number, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'offset', numberValue: value }, condition)
+    return this.push({ type: 'offset', numberValue: value }, condition)
   }
 
-  /**
-   * 分组查询，一般用getObject接收
-   * @param fields 可以传多个字段
-   * @returns Wrapper
-   */
   groupBy(fields: string | string[], condition: boolean = true): Wrapper {
     const fieldList = Array.isArray(fields) ? fields : [fields]
-    return this.pushAction({ type: 'groupBy', fields: fieldList }, condition)
+    return this.push({ type: 'groupBy', fields: fieldList }, condition)
   }
 
-  /**
-   * 指定索引列
-   * @param field 索引列
-   * @returns Wrapper
-   */
   indexedBy(field: string, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'indexedBy', field }, condition)
+    return this.push({ type: 'indexedBy', field }, condition)
   }
 
   /**
-   * 过滤分组后的结果
-   * @param sql having后面的sql条件
-   * @returns Wrapper
+   * GROUP BY 之后追加 HAVING 子句。
+   *
+   * 第二参数支持两种用法（按 typeof 区分）：
+   *   - 传 `ValueType[]`：作为 having SQL 的预编译参数；第三参数是拼接开关
+   *   - 传 `boolean`：当作拼接开关，本次调用没有预编译参数
+   *
+   * ```ts
+   * wrapper.having('count(*) > ?', [10])             // 走预编译，always 拼接
+   * wrapper.having('count(*) > ?', [10], hasFilter)  // 走预编译，按开关拼接
+   * wrapper.having('count(*) > 10', false)           // 不走预编译，按开关拼接（这里 false → 跳过）
+   * ```
+   *
+   * 由于是原生 SQL 出口，args 不经 `@Field({ enableBoolMapper })`。
    */
   having(sql: string, argsOrCondition?: relationalStore.ValueType[] | boolean,
     condition: boolean = true): Wrapper {
@@ -379,24 +277,14 @@ export class Wrapper {
     } else {
       args = argsOrCondition
     }
-    return this.pushAction({ type: 'having', sql, args }, enable)
+    return this.push({ type: 'having', sql, args }, enable)
   }
 
-  /**
-   * 在查询条件中添加 OR 逻辑，传入的wrapper仅用来拼接where条件
-   * @param wrapper 一个新的Wrapper
-   * @returns Wrapper
-   */
   or(wrapper: Wrapper, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'or', wrapper }, condition)
+    return this.push({ type: 'or', wrapper }, condition)
   }
 
-  /**
-   * 在查询条件中添加 and 逻辑，传入的wrapper仅用来拼接where条件
-   * @param wrapper 一个新的Wrapper
-   * @returns Wrapper
-   */
   and(wrapper: Wrapper, condition: boolean = true): Wrapper {
-    return this.pushAction({ type: 'and', wrapper }, condition)
+    return this.push({ type: 'and', wrapper }, condition)
   }
 }

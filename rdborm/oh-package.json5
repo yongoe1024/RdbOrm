@@ -1,7 +1,7 @@
 {
   "name": "@dims/rdborm",
-  "version": "1.0.0",
-  "description": "轻量ORM，简单无需SQL操作",
+  "version": "2.0.0",
+  "description": "轻量 ORM：装饰器映射、自动建表、链式条件、事务封装，零 SQL 即可完成 CRUD。",
   "main": "Index.ets",
   "author": "yongoe",
   "license": "Apache-2.0",
@@ -13,6 +13,8 @@
     "SQLite",
     "零SQL",
     "ORM",
-    "rdb"
+    "rdb",
+    "自动建表",
+    "事务"
   ]
 }
