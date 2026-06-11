@@ -4,56 +4,10 @@ import { TableParams } from '../model/TableParams'
 import { ColumnMeta } from '../model/ColumnMeta'
 import { Wrapper } from './Wrapper'
 import { buildPredicates } from './WrapperResolver'
+import { buildCreateTableSql, buildDropTableSql } from './TableSqlBuilder'
 
 const DOMAIN: number = 0x0000
 const TAG: string = 'rdborm'
-
-// ---------- SQL 语句构建工具（模块级纯函数） ----------
-
-/** 构建单列 DDL 定义 */
-function buildColumnDefSql(c: ColumnMeta): string {
-  const parts: string[] = [quoteIdentifier(c.column), c.type ?? 'TEXT']
-  if (c.primaryKey) {
-    parts.push('PRIMARY KEY')
-    // AUTOINCREMENT 仅对 INTEGER PK 合法（SQLite 规范）
-    if (c.autoIncrement !== false && c.type === 'INTEGER') {
-      parts.push('AUTOINCREMENT')
-    }
-  }
-  // INTEGER 主键作为 ROWID 别名允许 NULL 自增；其它类型主键必须 NOT NULL
-  if (c.nullable === false && (!c.primaryKey || c.type !== 'INTEGER')) {
-    parts.push('NOT NULL')
-  }
-  if (c.unique) {
-    parts.push('UNIQUE')
-  }
-  if (c.defaultValue !== undefined) {
-    parts.push(`DEFAULT ${formatDefaultValue(c.defaultValue)}`)
-  }
-  return parts.join(' ')
-}
-
-/** 格式化 DEFAULT 值 */
-function formatDefaultValue(v: relationalStore.ValueType): string {
-  if (v === null) {
-    return 'NULL'
-  }
-  if (typeof v === 'number') {
-    return String(v)
-  }
-  if (typeof v === 'boolean') {
-    return v ? '1' : '0'
-  }
-  if (typeof v === 'string') {
-    return `'${v.replace(/'/g, "''")}'`
-  }
-  throw new Error('createTable 暂不支持 BLOB / Uint8Array 默认值；请使用 executeSql 手写 CREATE TABLE')
-}
-
-/** SQL 标识符引号包裹 */
-function quoteIdentifier(name: string): string {
-  return `"${name.replace(/"/g, '""')}"`
-}
 
 /**
  * 数据库操作封装。建议通过 `RdbOrm.build(...).getDBHelper()` 获取实例。
@@ -109,22 +63,14 @@ export class DBHelper<T> {
    * @throws BusinessError
    */
   createTable(): void {
-    const sql = this.buildCreateTableSql()
+    const sql = buildCreateTableSql(this.params.tableName, this.params.columns)
     this.logSql(sql)
     this.store.executeSync(sql)
   }
 
-  private buildCreateTableSql(): string {
-    const cols: string[] = []
-    for (let i = 0; i < this.params.columns.length; i++) {
-      cols.push(buildColumnDefSql(this.params.columns[i]))
-    }
-    return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(this.params.tableName)} (\n  ${cols.join(',\n  ')}\n)`
-  }
-
   /** 等价于 `DROP TABLE IF EXISTS <table>` */
   dropTable(): void {
-    const sql = `DROP TABLE IF EXISTS ${quoteIdentifier(this.params.tableName)}`
+    const sql = buildDropTableSql(this.params.tableName)
     this.logSql(sql)
     this.store.executeSync(sql)
   }

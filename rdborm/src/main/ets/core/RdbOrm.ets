@@ -2,7 +2,6 @@ import { BuildParams } from '../model/BuildParams'
 import { DBHelper } from './DBHelper'
 import { TableParams } from '../model/TableParams'
 import { getOwnMeta } from '../model/MetaData'
-import { ColumnMeta } from '../model/ColumnMeta'
 
 /**
  * 一张表对应的 ORM 入口。通过 `RdbOrm.build` 创建，再用 `getDBHelper` 获取 `DBHelper`。
@@ -26,33 +25,7 @@ export class RdbOrm<T> {
     if (!meta) {
       throw new Error(`实体类 ${className} 缺少装饰器：请添加 @Table / @Id / @Field`)
     }
-    if (!meta.tableName || meta.tableName.trim().length === 0) {
-      throw new Error(`实体类 ${className} 缺少 @Table(name) 声明`)
-    }
-    if (!meta.columns || meta.columns.length === 0) {
-      throw new Error(`实体类 ${className} 至少需要一个 @Field 或 @Id`)
-    }
-    const columnNames = new Set<string>()
-    const propertyNames = new Set<string>()
-    let primaryKey: ColumnMeta | undefined = undefined
-    for (let i = 0; i < meta.columns.length; i++) {
-      const c = meta.columns[i]
-      if (!c.column || c.column.trim().length === 0) {
-        throw new Error(`实体类 ${className}.${c.property} 列名不能为空`)
-      }
-      if (columnNames.has(c.column)) {
-        throw new Error(`实体类 ${className} 列名重复：${c.column}`)
-      }
-      if (propertyNames.has(c.property)) {
-        throw new Error(`实体类 ${className} 属性重复：${c.property}`)
-      }
-      columnNames.add(c.column)
-      propertyNames.add(c.property)
-      // 装饰器期 @Id 已保证至多一个主键，这里只需取出，无需再查重
-      if (c.primaryKey) {
-        primaryKey = c
-      }
-    }
+    const primaryKey = meta.validate(className)
 
     return new RdbOrm<T>({
       buildParams,

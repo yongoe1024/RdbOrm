@@ -1,4 +1,4 @@
-import { FieldParams } from '../model/FieldParams'
+import { FieldParams } from '../model/DecoratorParams'
 import { getOrInitOwnMeta } from '../model/MetaData'
 import { ColumnMeta } from '../model/ColumnMeta'
 

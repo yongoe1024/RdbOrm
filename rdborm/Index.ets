@@ -12,6 +12,6 @@ export { Table } from './src/main/ets/decorator/Table'
 
 export { BuildParams } from './src/main/ets/model/BuildParams'
 
-export { FieldParams, IdParams } from './src/main/ets/model/FieldParams'
+export { FieldParams, IdParams } from './src/main/ets/model/DecoratorParams'
 
 export { SqlType } from './src/main/ets/model/ColumnMeta'

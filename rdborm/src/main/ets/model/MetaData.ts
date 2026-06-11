@@ -24,6 +24,41 @@ export class MetaData {
     }
     return undefined
   }
+
+  /**
+   * 校验元数据完整性并返回主键列（无主键返回 `undefined`）；不合法时抛错，错误信息含类名。
+   * 由 `RdbOrm.build` 在创建 ORM 前调用。
+   */
+  validate(className: string): ColumnMeta | undefined {
+    if (!this.tableName || this.tableName.trim().length === 0) {
+      throw new Error(`实体类 ${className} 缺少 @Table(name) 声明`)
+    }
+    if (this.columns.length === 0) {
+      throw new Error(`实体类 ${className} 至少需要一个 @Field 或 @Id`)
+    }
+    const columnNames = new Set<string>()
+    const propertyNames = new Set<string>()
+    let primaryKey: ColumnMeta | undefined = undefined
+    for (let i = 0; i < this.columns.length; i++) {
+      const c = this.columns[i]
+      if (!c.column || c.column.trim().length === 0) {
+        throw new Error(`实体类 ${className}.${c.property} 列名不能为空`)
+      }
+      if (columnNames.has(c.column)) {
+        throw new Error(`实体类 ${className} 列名重复：${c.column}`)
+      }
+      if (propertyNames.has(c.property)) {
+        throw new Error(`实体类 ${className} 属性重复：${c.property}`)
+      }
+      columnNames.add(c.column)
+      propertyNames.add(c.property)
+      // 装饰器期 @Id 已保证至多一个主键，这里只需取出
+      if (c.primaryKey) {
+        primaryKey = c
+      }
+    }
+    return primaryKey
+  }
 }
 
 /**
