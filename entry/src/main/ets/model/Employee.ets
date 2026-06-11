@@ -4,7 +4,7 @@ import { Field, Id, Table } from '@dims/rdborm'
 export class Employee {
   // 主键
   @Field({ type: 'INTEGER' })
-  @Id()
+  @Id({ autoIncrement: true })
   id?: number
   // 整数
   @Field({ type: 'INTEGER' })

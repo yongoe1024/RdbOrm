@@ -1,20 +1,20 @@
 import { BuildParams } from '../model/BuildParams'
 import { DBHelper } from './DBHelper'
-import { TableParams } from '../model/TableParams'
+import { DBParams } from '../model/DBParams'
 import { getOwnMeta } from '../model/MetaData'
 
 /**
- * 一张表对应的 ORM 入口。通过 `RdbOrm.build` 创建，再用 `getDBHelper` 获取 `DBHelper`。
+ * 一张表对应的 ORM 入口。通过 `RdbOrm.build` 创建，再用 `getDBHelper` 获取 `DBHelper`
  */
 export class RdbOrm<T> {
-  private params: TableParams<T>
+  private params: DBParams<T>
 
-  private constructor(params: TableParams<T>) {
+  private constructor(params: DBParams<T>) {
     this.params = params
   }
 
   /**
-   * 解析实体类装饰器并创建 ORM 操作对象。校验失败时抛错。
+   * 解析实体类装饰器并创建 ORM 操作对象
    */
   static build<T>(buildParams: BuildParams<T>): RdbOrm<T> {
     const className = (buildParams.class as ESObject).name as string
@@ -37,7 +37,8 @@ export class RdbOrm<T> {
   }
 
   /**
-   * 获取一个 DBHelper。底层 `RdbStore` 的生命周期由 HarmonyOS 内部管理。
+   * 获取一个 DBHelper。底层 `RdbStore` 的生命周期由 HarmonyOS 内部管理
+   * @throws BusinessError
    */
   async getDBHelper(): Promise<DBHelper<T>> {
     return DBHelper.create<T>(this.params)

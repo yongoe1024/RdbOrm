@@ -1,21 +1,12 @@
 import { IdParams } from '../model/DecoratorParams'
-import { getOrInitOwnMeta } from '../model/MetaData'
-import { ColumnMeta } from '../model/ColumnMeta'
+import { getOrInitOwnMeta, ColumnMeta } from '../model/MetaData'
 
 /**
- * 主键装饰器：仅标注哪个属性是表主键。
+ * 主键装饰器：标注表主键，**必须与同属性上的 `@Field` 叠加使用**
  *
- * - 列的类型 / 名称 / nullable / defaultValue / unique / enableBoolMapper 由叠加的 `@Field` 提供
- * - `@Id` 仅 `autoIncrement?: boolean` 一个参数（DDL 生成侧会过滤掉非 INTEGER 主键的 AUTOINCREMENT，即使用户写了 `true` 也不会出现在 SQL 里）
- * - 推荐写法（任一顺序均可，效果一致）：
- *   ```ts
- *   @Field({ type: 'INTEGER' })
- *   @Id()
- *   id?: number
- *   ```
- * - 仅 `@Id()` 不叠加 `@Field` 时，等价 `INTEGER PRIMARY KEY AUTOINCREMENT`
+ * `autoIncrement`仅对`INTEGER`类型有效
  */
-export function Id(data?: IdParams) {
+export function Id(data: IdParams) {
   return function (target: ESObject, propertyKey: string) {
     const meta = getOrInitOwnMeta(target)
 
@@ -24,29 +15,24 @@ export function Id(data?: IdParams) {
       throw new Error(`@Id 重复声明：已存在主键 ${existingPk.property}`)
     }
 
-    const wantAutoIncrement = data?.autoIncrement !== false
+    const wantAutoIncrement = data.autoIncrement
     const existing = meta.findByProperty(propertyKey)
 
     if (existing) {
       if (existing.primaryKey) {
         throw new Error(`@Id 重复声明：${propertyKey}`)
       }
-      // @Field 先跑了，把已存在的列升级为主键
+      // @Field 先跑了，把已存在的列升级为主键（type 由 @Field 提供，此处不再兜底）
       existing.primaryKey = true
       existing.nullable = false
       existing.unique = undefined // PK 隐含唯一，清除 @Field 可能设置的 unique 避免冗余 DDL
       existing.enableBoolMapper = undefined // 主键不会是 boolean，清除以与「@Id 先跑」路径保持顺序无关
-      // 若 @Field 未指定 type，默认 INTEGER（最常见的主键类型）
-      if (existing.type === undefined) {
-        existing.type = 'INTEGER'
-      }
       existing.autoIncrement = wantAutoIncrement
     } else {
-      // @Field 还没跑（或不会跑），建占位列；@Field 跑到时若指定属性会增量覆盖
+      // @Id 先于 @Field 跑，建主键占位列；type 等列定义由随后的 @Field 增量补全
       const placeholder: ColumnMeta = {
         property: propertyKey,
         column: propertyKey,
-        type: 'INTEGER',
         nullable: false,
         primaryKey: true,
         autoIncrement: wantAutoIncrement,

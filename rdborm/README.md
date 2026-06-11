@@ -1,6 +1,7 @@
 # RdbOrm
 
-轻量级 RDB ORM，使用装饰器完成实体映射，链式构造查询条件，零 SQL 即可完成增删改查。
+轻量级 RDB ORM，使用装饰器完成实体映射，链式构造查询条件，零 SQL 即可完成增删改查  
+特点：根据装饰器自动建表，一键增删改查，TS-SQL自动映射
 
 联系邮箱 121887765@qq.com
 
@@ -22,7 +23,7 @@ import { Field, Id, Table } from '@dims/rdborm'
 @Table('t_user')
 class User {
   @Field({ type: 'INTEGER' })
-  @Id()
+  @Id({ autoIncrement: true })
   id?: number
 
   @Field({ type: 'TEXT' })
@@ -38,12 +39,10 @@ class User {
 | 装饰器 | 作用 |
 |---|---|
 | `@Table('name')` | 绑定数据库表名 |
-| `@Field({ ... })` | 声明列。`type` 决定 SQL 类型（`INTEGER` / `TEXT` / `REAL` / `BLOB`），省略时默认 `TEXT`；`name` 可指定列名，省略时取属性名；`nullable` / `defaultValue` / `unique` 用于建表；布尔字段可加 `enableBoolMapper: true`（见下文） |
-| `@Id()` | 标注主键。仅一个可选参数 `autoIncrement`（默认 `true`，非 INTEGER 主键自动忽略）。叠加顺序任意（`@Field @Id` 或 `@Id @Field`） |
+| `@Field({ ... })` | 声明列，参数必传。`type` **必填**，决定 SQL 类型（`INTEGER` / `TEXT` / `REAL` / `BLOB`）；`name` 可指定列名，省略时取属性名；`nullable` / `defaultValue` / `unique` 用于建表；布尔字段可加 `enableBoolMapper: true`（见下文） |
+| `@Id({ autoIncrement })` | 标注主键，**必须与 `@Field` 叠加**（列类型由 `@Field` 提供）。参数 `autoIncrement` **必填**（非 INTEGER 主键自动忽略）。叠加顺序任意（`@Field @Id` 或 `@Id @Field`） |
 
-单独使用 `@Id()` 不叠加 `@Field` 时，等价 `INTEGER PRIMARY KEY AUTOINCREMENT`。
-
-字符串主键（UUID）写法：`@Field({ type: 'TEXT' }) @Id() id?: string`
+字符串主键（UUID）写法：`@Field({ type: 'TEXT' }) @Id({ autoIncrement: false }) id?: string`
 
 ### 2. 构建 ORM 对象
 
@@ -68,7 +67,7 @@ const orm = RdbOrm.build<User>({
 const db = await orm.getDBHelper()
 ```
 
-### 4. 建表
+### 4. 自动建表
 
 ```ts
 db.createTable()
@@ -178,7 +177,7 @@ console.log(typeof list[0].onJob) // 'boolean'
 
 ## 其他常用 API
 
-`dropTable()` `backup(fileName)` `restore(fileName)` `close()` `getVersion()` `setVersion(v)` `getStore()`
+`dropTable()` `close()` `getVersion()` `setVersion(v)` `getStore()`
 
 ## TaskPool
 
@@ -199,11 +198,11 @@ const result = await taskpool.execute(queryInWorker, getContext())
 - 装饰器校验在 `RdbOrm.build` 阶段立即执行，重复声明、表名为空、列重复等会抛错（信息含类名）。
 - `delete(wrapper)` 与 `update(values, wrapper)` 必须含至少一个 WHERE 条件，否则抛错；`clear()` 用于清空全表。
 - 行 → 实体映射只处理装饰器声明过的列，未声明列被丢弃。
-- 插入 / 更新只处理已赋值的装饰器字段，`undefined` 跳过。
+- 插入 / 更新只处理已赋值的装饰器字段，`null`相当于NULL，`undefined` 跳过。
 - `selectOne` 会先克隆 wrapper 再追加 `LIMIT 1`，不修改调用方对象。
 - `transaction(fn)` 不接受 async 函数或 Promise 返回值。
-- `update(values, wrapper)` 若在 `values` 上设置了主键属性，主键会一并写入 SET 子句（与只更新非主键字段的 `updateById` 不同）；不想改主键就不要在 `values` 上赋主键值。
-- `count(wrapper)` 只统计 WHERE 条件匹配的行数；请只传条件类 wrapper，不要带 `limit` / `offset` / `groupBy`（`offset` 会让结果恒为 0，`groupBy` 只返回最后一组的计数）。
+- `update(values, wrapper)` 若在 `values` 上设置了主键属性，主键会一并写入 SET 子句。
+- `count(wrapper)` 只统计 WHERE 条件匹配的行数；只传条件类 wrapper，不要带 `limit` / `offset` / `groupBy`（`offset` 会让结果恒为 0，`groupBy` 只返回最后一组的计数）。
 - `Wrapper.in('col', [..., null])` 中的 `null` **不会**匹配 `col IS NULL` 的行（SQL 三值逻辑），需显式 `.or(isNull('col'))` 拼分支。
 - `Wrapper.in('col', [])` 生成 `IN ()` 恒假条件，不匹配任何行（`notIn('col', [])` 同理恒真）。
 - `having(...)` 需配合 `groupBy` 使用，并在 `groupBy` 之后链式调用，否则底层 SQL 报错。

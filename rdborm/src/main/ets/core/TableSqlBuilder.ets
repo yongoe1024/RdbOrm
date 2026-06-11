@@ -1,9 +1,9 @@
 import { relationalStore } from '@kit.ArkData'
-import { ColumnMeta } from '../model/ColumnMeta'
+import { ColumnMeta } from '../model/MetaData'
 
 // ---------- ColumnMeta → DDL 文本（模块级纯函数） ----------
 
-/** 根据列元数据生成 `CREATE TABLE IF NOT EXISTS` 语句。 */
+/** 根据列元数据生成 `CREATE TABLE IF NOT EXISTS` 语句 */
 export function buildCreateTableSql(tableName: string, columns: ColumnMeta[]): string {
   const cols: string[] = []
   for (let i = 0; i < columns.length; i++) {
@@ -12,7 +12,7 @@ export function buildCreateTableSql(tableName: string, columns: ColumnMeta[]): s
   return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(tableName)} (\n  ${cols.join(',\n  ')}\n)`
 }
 
-/** 生成 `DROP TABLE IF EXISTS` 语句。 */
+/** 生成 `DROP TABLE IF EXISTS` 语句 */
 export function buildDropTableSql(tableName: string): string {
   return `DROP TABLE IF EXISTS ${quoteIdentifier(tableName)}`
 }

@@ -1,37 +1,5 @@
 import { relationalStore } from '@kit.ArkData'
-
-export type WrapperActionType =
-  | 'inDevices'
-  | 'inAllDevices'
-  | 'eq'
-  | 'notEq'
-  | 'or'
-  | 'and'
-  | 'contains'
-  | 'beginsWith'
-  | 'endsWith'
-  | 'isNull'
-  | 'isNotNull'
-  | 'like'
-  | 'glob'
-  | 'between'
-  | 'notBetween'
-  | 'lt'
-  | 'lte'
-  | 'gt'
-  | 'gte'
-  | 'orderByAsc'
-  | 'orderByDesc'
-  | 'distinct'
-  | 'limit'
-  | 'offset'
-  | 'groupBy'
-  | 'indexedBy'
-  | 'in'
-  | 'notIn'
-  | 'notLike'
-  | 'having'
-  | 'notContains'
+import { WrapperActionType } from './WrapperResolver'
 
 /**
  * 单条条件动作
@@ -52,11 +20,10 @@ export interface WrapperAction {
 }
 
 /**
- * Wrapper 中所有"值比较"类 action 类型（eq / lt / like / between / in / isNull 等），
- * 用于 `hasWhereActions()` 判断当前 wrapper 是否实际承载查询条件。
+ * Wrapper 中所有"值比较"类 action 类型
  *
- * **维护规则**：给 Wrapper 新增一个"值比较"类方法时，必须在下面列表中加对应的 type 字符串。
- * `or` / `and` 不属于此列表——它们由 `hasWhereActions()` 单独递归处理子 wrapper。
+ * **维护规则**：给 Wrapper 新增一个"值比较"类方法时，必须在下面列表中加对应的 type 字符串
+ * `or` / `and` 不属于此列表——由 `hasWhereActions()` 单独递归处理子 wrapper
  */
 const WRAPPER_WHERE_SET: Set<string> = new Set([
   'eq', 'notEq', 'contains', 'notContains', 'beginsWith', 'endsWith',
@@ -67,29 +34,23 @@ const WRAPPER_WHERE_SET: Set<string> = new Set([
 /**
  * 链式查询条件构造器
  *
- * 仅承载 WHERE / ORDER / LIMIT / 分组 / 逻辑组合等查询语义；
- * UPDATE 的字段值通过 `DBHelper.update(values, wrapper)` 的第一个参数传入。
- *
- * **`field` 参数命名空间**：所有方法的 `field: string` 参数都是**数据库列名**
- * （即 `@Field({ name: 'xxx' })` 重命名之后那个 `xxx`），不是 TS 属性名。
- * 没指定 `name:` 时列名等于属性名，看起来"传属性名"也对；但一旦配了 `@Field({ name })`
- * 重命名，必须改用列名，否则 SQL 找不到列，读取时的 enableBoolMapper 也不会生效。
+ * 所有方法的 `field: string` 参数都是**数据库列名**
  */
 export class Wrapper {
   private actions: WrapperAction[] = []
 
   /**
-   * @internal 仅供内部翻译层（WrapperResolver）读取，外部不应调用或修改返回值。
+   * @internal 仅供内部翻译层（WrapperResolver）读取，外部不应调用或修改返回值
    */
   getActions(): WrapperAction[] {
     return this.actions.slice()
   }
 
   /**
-   * 当前 Wrapper 是否至少包含一个 WHERE 条件（eq / lt / like / between / in / isNull 等值比较动作，
-   * 含递归检查 `or` / `and` 子 wrapper）。
+   * 当前 Wrapper 是否至少包含一个 WHERE 条件（eq / lt / like / between / in / isNull 等值比较动作
+   * 含递归检查 `or` / `and` 子 wrapper）
    *
-   * `DBHelper.update` 与 `delete` 用它检测"用了 wrapper 但没加条件"的误用模式。
+   * 防全表更新/删除
    */
   hasWhereActions(): boolean {
     for (let i = 0; i < this.actions.length; i++) {
@@ -107,8 +68,9 @@ export class Wrapper {
   }
 
   /**
-   * 浅拷贝当前 Wrapper（actions 数组拷贝，单个 action 引用共享）。
-   * 用于在不污染调用方对象的前提下追加额外条件，例如 selectOne 内部的 LIMIT 1。
+   * 浅拷贝当前 Wrapper（actions 数组拷贝，单个 action 引用共享）
+   *
+   * 用于在不污染调用方对象的前提下追加额外条件，例如 selectOne 内部的 LIMIT 1
    */
   clone(): Wrapper {
     const fresh = new Wrapper()

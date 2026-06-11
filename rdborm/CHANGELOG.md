@@ -7,3 +7,7 @@
 - 完整 CRUD：`insert` / `batchInsert` / `select` / `selectOne` / `count` / `update` / `updateById` / `delete` / `deleteById` / `clear`
 - 链式查询条件构造器 `Wrapper`
 - 事务包装 `transaction(fn)`（抛错自动回滚）
+
+## 1.0.0
+
+- 初版发布

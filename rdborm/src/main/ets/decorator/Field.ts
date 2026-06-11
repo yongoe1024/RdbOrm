@@ -1,14 +1,12 @@
 import { FieldParams } from '../model/DecoratorParams'
-import { getOrInitOwnMeta } from '../model/MetaData'
-import { ColumnMeta } from '../model/ColumnMeta'
+import { getOrInitOwnMeta, ColumnMeta } from '../model/MetaData'
 
 /**
- * 字段装饰器：声明实体属性与表列的映射。
+ * 字段装饰器：声明实体属性与表列的映射
  *
- * 与 `@Id` 叠加时（任一顺序）：`@Field` 提供列类型 / 名称 / nullable / defaultValue / unique / enableBoolMapper；
- * `@Id` 在同一列上加主键标记。如果 `@Id` 先跑过，本装饰器会**增量补全**已有的主键占位列，而不是重复创建。
+ * 如果 `@Id` 先跑过，本装饰器会**增量补全**已有的主键占位列，而不是重复创建
  */
-export function Field(data?: FieldParams) {
+export function Field(data: FieldParams) {
   return function (target: ESObject, propertyKey: string) {
     const meta = getOrInitOwnMeta(target)
     const existing = meta.findByProperty(propertyKey)
@@ -19,13 +17,11 @@ export function Field(data?: FieldParams) {
         throw new Error(`@Field 重复声明：${propertyKey}`)
       }
       // @Id 先跑了，本次 @Field 增量补全列属性
-      if (data?.name) {
+      if (data.name) {
         existing.column = data.name
       }
-      if (data?.type !== undefined) {
-        existing.type = data.type
-      }
-      if (data?.defaultValue !== undefined) {
+      existing.type = data.type
+      if (data.defaultValue !== undefined) {
         existing.defaultValue = data.defaultValue
       }
       // 主键列忽略以下属性（主键专属约束已自带，或与主键逻辑冲突）：
@@ -40,12 +36,12 @@ export function Field(data?: FieldParams) {
     // 普通字段路径
     const column: ColumnMeta = {
       property: propertyKey,
-      column: data?.name || propertyKey,
-      type: data?.type,
-      nullable: data?.nullable,
-      defaultValue: data?.defaultValue,
-      unique: data?.unique,
-      enableBoolMapper: data?.enableBoolMapper,
+      column: data.name || propertyKey,
+      type: data.type,
+      nullable: data.nullable,
+      defaultValue: data.defaultValue,
+      unique: data.unique,
+      enableBoolMapper: data.enableBoolMapper,
       primaryKey: false,
       autoIncrement: false,
     }

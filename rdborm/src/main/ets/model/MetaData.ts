@@ -1,7 +1,28 @@
-import { ColumnMeta } from './ColumnMeta'
+import { relationalStore } from '@kit.ArkData'
 
 /**
- * 实体类元数据，由 @Table / @Field / @Id 装饰器写入到原型 __meta__
+ * sql字段类型
+ */
+export type SqlType = 'INTEGER' | 'TEXT' | 'REAL' | 'BLOB'
+
+/**
+ * 字段元数据
+ */
+export interface ColumnMeta {
+  property: string
+  column: string
+  type?: SqlType
+  nullable?: boolean
+  defaultValue?: relationalStore.ValueType
+  unique?: boolean
+  primaryKey?: boolean
+  autoIncrement?: boolean
+  /** boolean 字段读取时把 1/0 转回 true/false */
+  enableBoolMapper?: boolean
+}
+
+/**
+ * 实体类元数据，由 @Table / @Field / @Id 装饰器写入到原型
  */
 export class MetaData {
   tableName: string = ''
@@ -26,8 +47,9 @@ export class MetaData {
   }
 
   /**
-   * 校验元数据完整性并返回主键列（无主键返回 `undefined`）；不合法时抛错，错误信息含类名。
-   * 由 `RdbOrm.build` 在创建 ORM 前调用。
+   * 校验元数据完整性并返回主键列（无主键返回 `undefined`）；不合法时抛错
+   *
+   * 由 `RdbOrm.build` 在创建 ORM 前调用
    */
   validate(className: string): ColumnMeta | undefined {
     if (!this.tableName || this.tableName.trim().length === 0) {
@@ -62,10 +84,9 @@ export class MetaData {
 }
 
 /**
- * 取或初始化 target 自身的 __meta__。
+ * 读取或初始化 target 自身的 __meta__
  *
- * 关键点：用 `hasOwnProperty` 而不是 `target.__meta__ != null` 判断，避免在类继承时
- * 读到父类原型上的 MetaData，导致子类装饰器误改父类元数据。
+ * **不支持继承，不沿原型链向上查找**
  */
 export function getOrInitOwnMeta(target: ESObject): MetaData {
   if (!Object.prototype.hasOwnProperty.call(target, '__meta__')) {
@@ -75,11 +96,9 @@ export function getOrInitOwnMeta(target: ESObject): MetaData {
 }
 
 /**
- * 只读地获取 target 自身的 __meta__；**不沿原型链向上查找**。
+ * 只读地获取 target 自身的 __meta__
  *
- * `RdbOrm.build` 用此函数读元数据，与装饰器写入端（`getOrInitOwnMeta`）保持
- * 同样的 own-property 严判语义：rdborm 不支持类继承共享元数据，子类必须
- * 自带装饰器；否则这里返回 `undefined`，由 build 抛出明确的"缺少装饰器"错误。
+ * **不支持继承，不沿原型链向上查找**
  */
 export function getOwnMeta(target: ESObject): MetaData | undefined {
   if (Object.prototype.hasOwnProperty.call(target, '__meta__')) {

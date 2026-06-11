@@ -14,4 +14,4 @@ export { BuildParams } from './src/main/ets/model/BuildParams'
 
 export { FieldParams, IdParams } from './src/main/ets/model/DecoratorParams'
 
-export { SqlType } from './src/main/ets/model/ColumnMeta'
+export { SqlType } from './src/main/ets/model/MetaData'
