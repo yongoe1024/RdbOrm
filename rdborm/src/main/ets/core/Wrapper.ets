@@ -78,7 +78,9 @@ const WRAPPER_WHERE_SET: Set<string> = new Set([
 export class Wrapper {
   private actions: WrapperAction[] = []
 
-  /** 仅供 DBHelper 内部读取，外部不应修改返回值 */
+  /**
+   * @internal 仅供内部翻译层（WrapperResolver）读取，外部不应调用或修改返回值。
+   */
   getActions(): WrapperAction[] {
     return this.actions.slice()
   }
@@ -87,8 +89,7 @@ export class Wrapper {
    * 当前 Wrapper 是否至少包含一个 WHERE 条件（eq / lt / like / between / in / isNull 等值比较动作，
    * 含递归检查 `or` / `and` 子 wrapper）。
    *
-   * `DBHelper.update` 与 `delete` 用它检测"用了 wrapper 但没加条件"的误用模式，
-   * 替代之前分散在 DBHelper 中需要同步维护的 `WHERE_ACTIONS` 硬编码列表。
+   * `DBHelper.update` 与 `delete` 用它检测"用了 wrapper 但没加条件"的误用模式。
    */
   hasWhereActions(): boolean {
     for (let i = 0; i < this.actions.length; i++) {

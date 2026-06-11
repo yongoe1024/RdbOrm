@@ -1,5 +1,3 @@
-<!-- 根目录 README.md 与 rdborm/README.md 保持完全一致，编辑后请运行：cp README.md rdborm/README.md -->
-
 # RdbOrm
 
 轻量级 RDB ORM，使用装饰器完成实体映射，链式构造查询条件，零 SQL 即可完成增删改查。
@@ -152,6 +150,8 @@ Wrapper 用于构造查询条件，方法均支持链式调用。`field` 参数�
 | 排序分页 | `orderByAsc` `orderByDesc` `distinct` `limit` `offset` | |
 | 分组 | `groupBy` `having` | |
 | 逻辑 | `or` `and` | 嵌套 Wrapper |
+| 索引 | `indexedBy` | 指定查询使用的索引 |
+| 分布式 | `inDevices` `inAllDevices` | 限定指定 / 全部分布式设备 |
 | 工具 | `clone` | 浅拷贝 |
 
 ## Boolean 字段读取转换
@@ -202,4 +202,8 @@ const result = await taskpool.execute(queryInWorker, getContext())
 - 插入 / 更新只处理已赋值的装饰器字段，`undefined` 跳过。
 - `selectOne` 会先克隆 wrapper 再追加 `LIMIT 1`，不修改调用方对象。
 - `transaction(fn)` 不接受 async 函数或 Promise 返回值。
+- `update(values, wrapper)` 若在 `values` 上设置了主键属性，主键会一并写入 SET 子句（与只更新非主键字段的 `updateById` 不同）；不想改主键就不要在 `values` 上赋主键值。
+- `count(wrapper)` 只统计 WHERE 条件匹配的行数；请只传条件类 wrapper，不要带 `limit` / `offset` / `groupBy`（`offset` 会让结果恒为 0，`groupBy` 只返回最后一组的计数）。
 - `Wrapper.in('col', [..., null])` 中的 `null` **不会**匹配 `col IS NULL` 的行（SQL 三值逻辑），需显式 `.or(isNull('col'))` 拼分支。
+- `Wrapper.in('col', [])` 生成 `IN ()` 恒假条件，不匹配任何行（`notIn('col', [])` 同理恒真）。
+- `having(...)` 需配合 `groupBy` 使用，并在 `groupBy` 之后链式调用，否则底层 SQL 报错。

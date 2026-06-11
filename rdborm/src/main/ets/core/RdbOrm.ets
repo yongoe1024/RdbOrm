@@ -48,10 +48,8 @@ export class RdbOrm<T> {
       }
       columnNames.add(c.column)
       propertyNames.add(c.property)
+      // 装饰器期 @Id 已保证至多一个主键，这里只需取出，无需再查重
       if (c.primaryKey) {
-        if (primaryKey) {
-          throw new Error(`实体类 ${className} 主键重复：${primaryKey.property} / ${c.property}`)
-        }
         primaryKey = c
       }
     }

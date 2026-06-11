@@ -35,6 +35,7 @@ export function Id(data?: IdParams) {
       existing.primaryKey = true
       existing.nullable = false
       existing.unique = undefined // PK 隐含唯一，清除 @Field 可能设置的 unique 避免冗余 DDL
+      existing.enableBoolMapper = undefined // 主键不会是 boolean，清除以与「@Id 先跑」路径保持顺序无关
       // 若 @Field 未指定 type，默认 INTEGER（最常见的主键类型）
       if (existing.type === undefined) {
         existing.type = 'INTEGER'

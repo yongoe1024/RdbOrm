@@ -2,7 +2,8 @@ import { relationalStore } from '@kit.ArkData'
 import { hilog } from '@kit.PerformanceAnalysisKit'
 import { TableParams } from '../model/TableParams'
 import { ColumnMeta } from '../model/ColumnMeta'
-import { Wrapper, WrapperAction } from './Wrapper'
+import { Wrapper } from './Wrapper'
+import { buildPredicates } from './WrapperResolver'
 
 const DOMAIN: number = 0x0000
 const TAG: string = 'rdborm'
@@ -52,40 +53,6 @@ function formatDefaultValue(v: relationalStore.ValueType): string {
 /** SQL 标识符引号包裹 */
 function quoteIdentifier(name: string): string {
   return `"${name.replace(/"/g, '""')}"`
-}
-
-// ---------- Wrapper action → RdbPredicates 分发映射 ----------
-
-const ACTION_HANDLERS: Record<string, (p: relationalStore.RdbPredicates, a: WrapperAction, f: string | undefined) => void> = {
-  inDevices:    (p, a)       => p.inDevices(a.devices ?? []),
-  inAllDevices: (p)          => p.inAllDevices(),
-  eq:           (p, a, f)    => p.equalTo(f!, a.value!),
-  notEq:        (p, a, f)    => p.notEqualTo(f!, a.value!),
-  lt:           (p, a, f)    => p.lessThan(f!, a.value!),
-  lte:          (p, a, f)    => p.lessThanOrEqualTo(f!, a.value!),
-  gt:           (p, a, f)    => p.greaterThan(f!, a.value!),
-  gte:          (p, a, f)    => p.greaterThanOrEqualTo(f!, a.value!),
-  between:      (p, a, f)    => p.between(f!, a.start!, a.end!),
-  notBetween:   (p, a, f)    => p.notBetween(f!, a.start!, a.end!),
-  in:           (p, a, f)    => p.in(f!, a.values ?? []),
-  notIn:        (p, a, f)    => p.notIn(f!, a.values ?? []),
-  isNull:       (p, _, f)    => p.isNull(f!),
-  isNotNull:    (p, _, f)    => p.isNotNull(f!),
-  like:         (p, a, f)    => p.like(f!, a.value as string),
-  notLike:      (p, a, f)    => p.notLike(f!, a.value as string),
-  glob:         (p, a, f)    => p.glob(f!, a.value as string),
-  contains:     (p, a, f)    => p.contains(f!, a.value as string),
-  notContains:  (p, a, f)    => p.notContains(f!, a.value as string),
-  beginsWith:   (p, a, f)    => p.beginsWith(f!, a.value as string),
-  endsWith:     (p, a, f)    => p.endsWith(f!, a.value as string),
-  orderByAsc:   (p, _, f)    => p.orderByAsc(f!),
-  orderByDesc:  (p, _, f)    => p.orderByDesc(f!),
-  distinct:     (p)          => p.distinct(),
-  limit:        (p, a)       => p.limitAs(a.numberValue!),
-  offset:       (p, a)       => p.offsetAs(a.numberValue!),
-  groupBy:      (p, a)       => p.groupBy(a.fields ?? []),
-  indexedBy:    (p, _, f)    => p.indexedBy(f!),
-  having:       (p, a)       => p.having(a.sql!, a.args),
 }
 
 /**
@@ -142,7 +109,7 @@ export class DBHelper<T> {
    * @throws BusinessError
    */
   createTable(): void {
-    const sql = buildCreateTableSql()
+    const sql = this.buildCreateTableSql()
     this.logSql(sql)
     this.store.executeSync(sql)
   }
@@ -194,7 +161,7 @@ export class DBHelper<T> {
 
   /** 按条件查询实体列表。无条件时返回全表。 */
   select(wrapper?: Wrapper, columns?: string[]): T[] {
-    const predicates = this.buildPredicates(wrapper)
+    const predicates = buildPredicates(this.params.tableName, wrapper)
     this.logQuery(predicates, columns)
     const rs = this.store.querySync(predicates, columns)
     return this.consumeResultSet(rs, () => this.rowsToEntities(rs))
@@ -211,19 +178,16 @@ export class DBHelper<T> {
     return list.length > 0 ? list[0] : null
   }
 
-  /** 计数。 */
+  /** 计数。只统计 WHERE 匹配行数，调用方不应传 limit/offset/groupBy（见 README）。 */
   count(wrapper?: Wrapper): number {
-    const predicates = this.buildPredicates(wrapper)
+    const predicates = buildPredicates(this.params.tableName, wrapper)
     const cols: string[] = ['count(*) as __rdborm_count__']
     this.logQuery(predicates, cols)
     const rs = this.store.querySync(predicates, cols)
-    return this.consumeResultSet(rs, () => {
-      let total = 0
-      while (rs.goToNextRow()) {
-        total = Number(rs.getRow()['__rdborm_count__'] ?? 0)
-      }
-      return total
-    })
+    // count(*) 只返回一行
+    return this.consumeResultSet(rs, () =>
+      rs.goToNextRow() ? Number(rs.getRow()['__rdborm_count__'] ?? 0) : 0
+    )
   }
 
   // ---------- 写入 ----------
@@ -254,6 +218,8 @@ export class DBHelper<T> {
    * 按条件更新指定字段。
    * @param values 待更新字段对象（按属性名传入，会自动映射为列名；传 `undefined` 的字段忽略，传 `null` 写入 NULL）
    *               实体类的字段建议都声明为可选 `?`，这样可以只填要更新的字段。
+   *               注意：若 `values` 上设置了主键属性，主键也会进入 SET 子句（与只更新非主键字段的 `updateById` 不同）；
+   *               不想改主键就不要在 `values` 上赋主键值。
    * @param wrapper 必传，至少一条 WHERE 条件
    */
   update(values: T, wrapper: Wrapper, conflict?: relationalStore.ConflictResolution): number {
@@ -264,7 +230,7 @@ export class DBHelper<T> {
     if (Object.keys(bucket).length === 0) {
       throw new Error('update(values, wrapper) 的 values 必须包含至少一个被装饰过的字段')
     }
-    const predicates = this.buildPredicates(wrapper)
+    const predicates = buildPredicates(this.params.tableName, wrapper)
     if (this.debug()) {
       const info = relationalStore.getUpdateSqlInfo(predicates, bucket, conflict)
       this.logSql(info.sql, info.args)
@@ -304,7 +270,7 @@ export class DBHelper<T> {
     if (!wrapper.hasWhereActions()) {
       throw new Error('delete(wrapper) 必须至少传入一个 WHERE 条件；要清空整张表请使用 clear()')
     }
-    return this.executeDelete(this.buildPredicates(wrapper))
+    return this.executeDelete(buildPredicates(this.params.tableName, wrapper))
   }
 
   /** 按主键删除。 */
@@ -423,8 +389,7 @@ export class DBHelper<T> {
 
   /**
    * ResultSet 行 → 实体对象。
-   * - 仅写回在 `propertyToColumn` 中声明过的列，未声明列被**丢弃**（2.0 行为变化，
-   *   1.0 会直接挂到返回对象上造成类型污染）。
+   * - 仅写回在 `propertyToColumn` 中声明过的列，未声明列被**丢弃**。
    * - 配了 `@Field({ enableBoolMapper: true })` 的列，把 `1`/`0` 转回 `true`/`false`；
    *   `null` / `undefined` 直通不转换。
    * - 其它列原值透传（HarmonyOS 内部按列类型返回 number / string / Uint8Array 等）。
@@ -453,44 +418,6 @@ export class DBHelper<T> {
     return list
   }
 
-  private buildPredicates(wrapper?: Wrapper): relationalStore.RdbPredicates {
-    const predicates = new relationalStore.RdbPredicates(this.params.tableName)
-    if (wrapper) {
-      this.applyWrapper(predicates, wrapper)
-    }
-    return predicates
-  }
-
-  /**
-   * 把 wrapper 的动作翻译到 RdbPredicates。
-   * 大多数 action 通过模块级 `ACTION_HANDLERS` 分发；`or`/`and` 需递归处理子 wrapper。
-   */
-  private applyWrapper(predicates: relationalStore.RdbPredicates, wrapper: Wrapper): void {
-    const actions = wrapper.getActions()
-    for (let i = 0; i < actions.length; i++) {
-      const action = actions[i]
-      const handler = ACTION_HANDLERS[action.type]
-      if (handler) {
-        handler(predicates, action, action.field)
-      } else if (action.type === 'or') {
-        predicates.or()
-        this.applyLogicGroup(predicates, action.wrapper)
-      } else if (action.type === 'and') {
-        predicates.and()
-        this.applyLogicGroup(predicates, action.wrapper)
-      }
-    }
-  }
-
-  private applyLogicGroup(predicates: relationalStore.RdbPredicates, wrapper?: Wrapper): void {
-    if (!wrapper) {
-      return
-    }
-    predicates.beginWrap()
-    this.applyWrapper(predicates, wrapper)
-    predicates.endWrap()
-  }
-
   private executeDelete(predicates: relationalStore.RdbPredicates): number {
     if (this.debug()) {
       const info = relationalStore.getDeleteSqlInfo(predicates)
@@ -514,14 +441,6 @@ export class DBHelper<T> {
       throw new Error(`实体类 ${className} 未声明主键，updateById/deleteById 不可用，请使用 @Id`)
     }
     return pk
-  }
-
-  private buildCreateTableSql(): string {
-    const cols: string[] = []
-    for (let i = 0; i < this.params.columns.length; i++) {
-      cols.push(buildColumnDefSql(this.params.columns[i]))
-    }
-    return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(this.params.tableName)} (\n  ${cols.join(',\n  ')}\n)`
   }
 
   private isPromiseLike(value: ESObject): boolean {
