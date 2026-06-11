@@ -99,7 +99,7 @@ db.select(
   new Wrapper().gte('age', 18).orderByDesc('id').limit(10)
 )
 
-// 查询单条（无结果返回 null）
+// 查询单条（无结果返回 undefined）
 db.selectOne(new Wrapper().eq('id', 1))
 
 // 统计
@@ -198,7 +198,7 @@ const result = await taskpool.execute(queryInWorker, getContext())
 - 装饰器校验在 `RdbOrm.build` 阶段立即执行，重复声明、表名为空、列重复等会抛错（信息含类名）。
 - `delete(wrapper)` 与 `update(values, wrapper)` 必须含至少一个 WHERE 条件，否则抛错；`clear()` 用于清空全表。
 - 行 → 实体映射只处理装饰器声明过的列，未声明列被丢弃。
-- 插入 / 更新只处理已赋值的装饰器字段，`null`相当于NULL，`undefined` 跳过。
+- 插入 / 更新只处理已赋值的装饰器字段，null 写入 NULL，undefined 跳过。
 - `selectOne` 会先克隆 wrapper 再追加 `LIMIT 1`，不修改调用方对象。
 - `transaction(fn)` 不接受 async 函数或 Promise 返回值。
 - `update(values, wrapper)` 若在 `values` 上设置了主键属性，主键会一并写入 SET 子句。

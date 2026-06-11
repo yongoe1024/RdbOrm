@@ -26,7 +26,7 @@ export class LogUtils {
         const info = relationalStore.getQuerySqlInfo(predicates, columns)
         hilog.debug(DOMAIN, TAG, `SQL:${info.sql}，args:${JSON.stringify(info.args ?? [])}`)
       } catch (error) {
-        hilog.error(DOMAIN, TAG, `logQuery:msg${error.message},code:${error.code}}`)
+        hilog.error(DOMAIN, TAG, `logQuery:msg${error.message},code:${error.code}`)
       }
     }
   }
@@ -37,7 +37,7 @@ export class LogUtils {
         const info = relationalStore.getInsertSqlInfo(table, values, conflict)
         hilog.debug(DOMAIN, TAG, `SQL:${info.sql}，args:${JSON.stringify(info.args ?? [])}`)
       } catch (error) {
-        hilog.error(DOMAIN, TAG, `logQuery:msg${error.message},code:${error.code}}`)
+        hilog.error(DOMAIN, TAG, `logInsert:msg${error.message},code:${error.code}`)
       }
     }
   }
@@ -49,7 +49,7 @@ export class LogUtils {
         const info = relationalStore.getUpdateSqlInfo(predicates, values, conflict)
         hilog.debug(DOMAIN, TAG, `SQL:${info.sql}，args:${JSON.stringify(info.args ?? [])}`)
       } catch (error) {
-        hilog.error(DOMAIN, TAG, `logQuery:msg${error.message},code:${error.code}}`)
+        hilog.error(DOMAIN, TAG, `logUpdate:msg${error.message},code:${error.code}`)
       }
     }
   }
@@ -60,7 +60,7 @@ export class LogUtils {
         const info = relationalStore.getDeleteSqlInfo(predicates)
         hilog.debug(DOMAIN, TAG, `SQL:${info.sql}，args:${JSON.stringify(info.args ?? [])}`)
       } catch (error) {
-        hilog.error(DOMAIN, TAG, `logQuery:msg${error.message},code:${error.code}}`)
+        hilog.error(DOMAIN, TAG, `logDelete:msg${error.message},code:${error.code}`)
       }
     }
   }

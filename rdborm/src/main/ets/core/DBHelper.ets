@@ -131,7 +131,7 @@ export class DBHelper<T> {
   }
 
   /**
-   * 计数。只统计 WHERE 匹配行数，调用方不应传 limit/offset/groupBy（见 README)
+   * 计数。只统计 WHERE 匹配行数，调用方不应传 limit/offset/groupBy（见 README）
    * @throws BusinessError
    */
   count(wrapper?: Wrapper): number {
@@ -236,6 +236,7 @@ export class DBHelper<T> {
     const pk = this.getPrimaryKeyOrThrow()
     const predicates = new relationalStore.RdbPredicates(this.params.tableName)
     predicates.equalTo(pk.column, id)
+    this.logUtils.logDelete(predicates)
     return this.store.deleteSync(predicates)
   }
 
@@ -245,7 +246,9 @@ export class DBHelper<T> {
    * @throws BusinessError
    */
   clear(): number {
-    return this.store.deleteSync(new relationalStore.RdbPredicates(this.params.tableName))
+    const predicates = new relationalStore.RdbPredicates(this.params.tableName)
+    this.logUtils.logDelete(predicates)
+    return this.store.deleteSync(predicates)
   }
 
   // ---------- 事务 ----------
