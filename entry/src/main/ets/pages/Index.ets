@@ -19,6 +19,7 @@ import {
   testUpdate,
   testUpdateById,
 } from './IndexActions'
+import router from '@ohos.router'
 
 const DATABASE_NAME: string = 'RdbTest.db'
 
@@ -92,6 +93,22 @@ struct Index {
 
             this.buildActionButton('清空表', '#F39C12', async () => {
               await testClearTable(this.orm)
+            })
+          }
+          .width('100%')
+          .padding(20)
+          .backgroundColor('#FDFDFD')
+          .borderRadius(24)
+
+          Column({ space: 12 }) {
+            Text('压力测试')
+              .fontSize(18)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#182431')
+              .width('100%')
+
+            this.buildActionButton('进入压力测试页', '#9B51E0', async () => {
+              router.pushUrl({ url: 'pages/StressTest' })
             })
           }
           .width('100%')
