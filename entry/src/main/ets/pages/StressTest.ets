@@ -249,6 +249,11 @@ struct StressTest {
   @State progressCount: number = 0
   @State ormResult: WorkerResult = { insertMs: [], queryMs: [], error: '' }
   @State nativeResult: WorkerResult = { insertMs: [], queryMs: [], error: '' }
+  /** 上一轮的结果，用于"上次差距"列对比；默认空（首轮显示 0） */
+  @State lastSnapshot: StressTestSnapshot = {
+    orm: { insertMs: [], queryMs: [], error: '' },
+    native: { insertMs: [], queryMs: [], error: '' },
+  }
 
   aboutToAppear(): void {
     // 每一步对应一个 eventId（PROGRESS_EVENT_ID + step），worker 跑完一步就 emit 对应的 eventId
@@ -270,6 +275,8 @@ struct StressTest {
     this.running = true
     this.errorMsg = ''
     this.progressCount = 0
+    // 先把当前显示的（上一轮）结果存进 lastSnapshot，供本轮"上次差距"列对比
+    this.lastSnapshot = { orm: this.ormResult, native: this.nativeResult }
     try {
       const r = await runStressTest()
       this.ormResult = r.orm
@@ -287,11 +294,25 @@ struct StressTest {
     }
   }
 
-  /** 差距（毫秒）：ORM - 原生；正数=ORM 更慢，负数=更快 */
-  private diffMs(ormMs: number, nativeMs: number): string {
-    const diff = ormMs - nativeMs
-    const sign = diff >= 0 ? '+' : ''
-    return `${sign}${diff} ms`
+  /** 上次差距 = 上一轮的"每条差距" = (上次ORM - 上次原生) / 次数；无上一轮数据时返回 0 */
+  private lastDiffPerCount(lastOrmArr: number[], lastNatArr: number[], i: number, count: number): string {
+    if (lastOrmArr.length <= i || lastNatArr.length <= i) {
+      return '0 ms/条'
+    }
+    if (count <= 0) {
+      return '-'
+    }
+    const perCount = (lastOrmArr[i] - lastNatArr[i]) / count
+    return `${perCount.toFixed(4)} ms/条`
+  }
+
+  /** 每条差距 = (ORM - 原生) / 次数；负数=ORM 更快。次数为 0 时返回 '-' */
+  private diffPerCount(ormMs: number, nativeMs: number, count: number): string {
+    if (count <= 0) {
+      return '-'
+    }
+    const perCount = (ormMs - nativeMs) / count
+    return `${perCount.toFixed(4)} ms/条`
   }
 
   @Builder
@@ -371,19 +392,21 @@ struct StressTest {
                 .width('100%')
               Column() {
                 Row() {
-                  this.cell('数据量', '28%', true)
-                  this.cell('ORM', '24%', true)
-                  this.cell('原生', '24%', true)
-                  this.cell('差距', '24%', true)
+                  this.cell('数据量', '16%', true)
+                  this.cell('ORM', '16%', true)
+                  this.cell('原生', '16%', true)
+                  this.cell('上次差距', '26%', true)
+                  this.cell('每条差距', '26%', true)
                 }
                 .width('100%')
                 .backgroundColor('#EEF1F5')
                 ForEach(INSERT_SIZES, (size: number, i: number) => {
                   Row() {
-                    this.cell(`${size}`, '28%', false)
-                    this.cell(`${this.ormResult.insertMs[i]}`, '24%', false)
-                    this.cell(`${this.nativeResult.insertMs[i]}`, '24%', false)
-                    this.cell(this.diffMs(this.ormResult.insertMs[i], this.nativeResult.insertMs[i]), '24%', false)
+                    this.cell(`${size}`, '16%', false)
+                    this.cell(`${this.ormResult.insertMs[i]}`, '16%', false)
+                    this.cell(`${this.nativeResult.insertMs[i]}`, '16%', false)
+                    this.cell(this.lastDiffPerCount(this.lastSnapshot.orm.insertMs, this.lastSnapshot.native.insertMs, i, size), '26%', false)
+                    this.cell(this.diffPerCount(this.ormResult.insertMs[i], this.nativeResult.insertMs[i], size), '26%', false)
                   }
                   .width('100%')
                   .backgroundColor(i % 2 === 0 ? '#FFFFFF' : '#F7F9FB')
@@ -405,19 +428,21 @@ struct StressTest {
                 .width('100%')
               Column() {
                 Row() {
-                  this.cell('次数', '28%', true)
-                  this.cell('ORM', '24%', true)
-                  this.cell('原生', '24%', true)
-                  this.cell('差距', '24%', true)
+                  this.cell('次数', '16%', true)
+                  this.cell('ORM', '16%', true)
+                  this.cell('原生', '16%', true)
+                  this.cell('上次差距', '26%', true)
+                  this.cell('每条差距', '26%', true)
                 }
                 .width('100%')
                 .backgroundColor('#EEF1F5')
                 ForEach(QUERY_ITERS, (iters: number, i: number) => {
                   Row() {
-                    this.cell(`${iters}`, '28%', false)
-                    this.cell(`${this.ormResult.queryMs[i]}`, '24%', false)
-                    this.cell(`${this.nativeResult.queryMs[i]}`, '24%', false)
-                    this.cell(this.diffMs(this.ormResult.queryMs[i], this.nativeResult.queryMs[i]), '24%', false)
+                    this.cell(`${iters}`, '16%', false)
+                    this.cell(`${this.ormResult.queryMs[i]}`, '16%', false)
+                    this.cell(`${this.nativeResult.queryMs[i]}`, '16%', false)
+                    this.cell(this.lastDiffPerCount(this.lastSnapshot.orm.queryMs, this.lastSnapshot.native.queryMs, i, iters), '26%', false)
+                    this.cell(this.diffPerCount(this.ormResult.queryMs[i], this.nativeResult.queryMs[i], iters), '26%', false)
                   }
                   .width('100%')
                   .backgroundColor(i % 2 === 0 ? '#FFFFFF' : '#F7F9FB')
@@ -429,11 +454,6 @@ struct StressTest {
               .borderWidth(1)
               .borderColor('#E5E8EC')
             }
-
-            Text('差距 = ORM - 原生（毫秒）；正数表示 ORM 更慢，负数表示更快。')
-              .fontSize(11)
-              .fontColor('#8A929C')
-              .width('100%')
           } else {
             Text('点击「运行测试」开始')
               .fontSize(14)
